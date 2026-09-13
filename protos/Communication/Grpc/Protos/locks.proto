@@ -1,0 +1,161 @@
+syntax = "proto3";
+
+import "Communication/Grpc/Protos/routing.proto";
+
+service Locker {
+  rpc TryLock (GrpcTryLockRequest) returns (GrpcTryLockResponse);
+  rpc TryExtendLock (GrpcExtendLockRequest) returns (GrpcExtendLockResponse);
+  rpc Unlock (GrpcUnlockRequest) returns (GrpcUnlockResponse);
+  rpc GetLock (GrpcGetLockRequest) returns (GrpcGetLockResponse);
+  rpc BatchClientLockRequests (stream GrpcBatchClientLockRequest) returns (stream GrpcBatchClientLockResponse);
+  rpc BatchServerLockRequests (stream GrpcBatchServerLockRequest) returns (stream GrpcBatchServerLockResponse);
+}
+
+message GrpcTryLockRequest {
+  string Resource = 1;
+  bytes Owner = 2;
+  int32 ExpiresMs = 3;
+  GrpcLockDurability Durability = 4;
+}
+
+message GrpcTryLockResponse {
+  optional string ServedFrom = 1;
+  GrpcLockResponseType Type = 2;
+  int64 FencingToken = 3;
+  // Additive advisory routing hint. Absent from a node that resolved no owner and from an
+  // older peer, which leaves the caller on its existing endpoint selection.
+  optional GrpcRouteHint Route = 4;
+}
+
+message GrpcExtendLockRequest {
+  string Resource = 1;
+  optional bytes Owner = 2;
+  int32 ExpiresMs = 3;
+  GrpcLockDurability Durability = 4;
+}
+
+message GrpcExtendLockResponse {
+  optional string ServedFrom = 1;
+  GrpcLockResponseType Type = 2;
+  int64 FencingToken = 3;
+  // Additive advisory routing hint. Absent from a node that resolved no owner and from an
+  // older peer, which leaves the caller on its existing endpoint selection.
+  optional GrpcRouteHint Route = 4;
+}
+
+message GrpcUnlockRequest {
+  string Resource = 1;
+  optional bytes Owner = 2;
+  GrpcLockDurability Durability = 3;
+}
+
+message GrpcUnlockResponse {
+  optional string ServedFrom = 1;
+  GrpcLockResponseType Type = 2;
+  // Additive advisory routing hint. Absent from a node that resolved no owner and from an
+  // older peer, which leaves the caller on its existing endpoint selection.
+  optional GrpcRouteHint Route = 3;
+}
+
+message GrpcGetLockRequest {
+  string Resource = 1;
+  GrpcLockDurability durability = 2;
+}
+
+message GrpcGetLockResponse {
+  optional string ServedFrom = 1;
+  GrpcLockResponseType Type = 2;
+  optional bytes Owner = 3;
+  int32 ExpiresNode = 4;
+  int64 ExpiresPhysical = 5;
+  uint32 ExpiresCounter = 6;
+  int64 FencingToken = 7;
+  // Additive advisory routing hint. Absent from a node that resolved no owner and from an
+  // older peer, which leaves the caller on its existing endpoint selection.
+  optional GrpcRouteHint Route = 8;
+}
+
+message GrpcBatchClientLockRequest {
+  GrpcLockClientBatchType Type = 1;
+  int32 RequestId = 2;
+  oneof payload {
+    GrpcTryLockRequest TryLock = 3;
+    GrpcUnlockRequest Unlock = 4;
+    GrpcExtendLockRequest ExtendLock = 5;
+    GrpcGetLockRequest GetLock = 6;
+  }
+}
+
+message GrpcBatchClientLockResponse
+{
+  GrpcLockClientBatchType Type = 1;
+  int32 RequestId = 2;
+  oneof payload {
+    GrpcTryLockResponse TryLock = 3;
+    GrpcUnlockResponse Unlock = 4;
+    GrpcExtendLockResponse ExtendLock = 5;
+    GrpcGetLockResponse GetLock = 6;
+  }
+}
+
+message GrpcBatchServerLockRequest {
+  GrpcLockServerBatchType Type = 1;
+  int32 RequestId = 2;
+  // How many times this operation was already forwarded when the sender wrote it, this hop
+  // included. The receiver serves under that count so the forward budget spans the whole chain
+  // instead of restarting at every node. Absent (0) from an older peer still means "forwarded".
+  int32 ForwardHops = 7;
+  oneof payload {
+    GrpcTryLockRequest TryLock = 3;
+    GrpcUnlockRequest Unlock = 4;
+    GrpcExtendLockRequest ExtendLock = 5;
+    GrpcGetLockRequest GetLock = 6;
+  }
+}
+
+message GrpcBatchServerLockResponse
+{
+  GrpcLockServerBatchType Type = 1;
+  int32 RequestId = 2;
+  oneof payload {
+    GrpcTryLockResponse TryLock = 3;
+    GrpcUnlockResponse Unlock = 4;
+    GrpcExtendLockResponse ExtendLock = 5;
+    GrpcGetLockResponse GetLock = 6;
+  }
+}
+
+enum GrpcLockClientBatchType {
+  TYPE_NONE = 0;
+  TYPE_TRY_LOCK = 1;
+  TYPE_EXTEND_LOCK = 2;
+  TYPE_UNLOCK = 3;
+  TYPE_GET_LOCK = 4;
+}
+
+enum GrpcLockServerBatchType {
+  SERVER_TYPE_NONE = 0;
+  SERVER_TYPE_TRY_LOCK = 1;
+  SERVER_TYPE_EXTEND_LOCK = 2;
+  SERVER_TYPE_UNLOCK = 3;
+  SERVER_TYPE_GET_LOCK = 4;
+}
+
+enum GrpcLockResponseType {
+  LOCK_RESPONSE_TYPE_LOCKED = 0;
+  LOCK_RESPONSE_TYPE_BUSY = 1;
+  LOCK_RESPONSE_TYPE_EXTENDED = 2;
+  LOCK_RESPONSE_TYPE_UNLOCKED = 3;
+  LOCK_RESPONSE_TYPE_GOT = 4;
+  LOCK_RESPONSE_TYPE_ERRORED = 99;
+  LOCK_RESPONSE_TYPE_INVALID_INPUT = 100;
+  LOCK_RESPONSE_TYPE_MUST_RETRY = 101;
+  LOCK_RESPONSE_TYPE_LOCK_DOES_NOT_EXIST = 102;
+  LOCK_RESPONSE_TYPE_INVALID_OWNER = 103;
+  LOCK_RESPONSE_TYPE_ABORTED = 104;
+}
+
+enum GrpcLockDurability {
+  LOCK_DURABILITY_EPHEMERAL = 0;
+  LOCK_DURABILITY_PERSISTENT = 1;  
+}

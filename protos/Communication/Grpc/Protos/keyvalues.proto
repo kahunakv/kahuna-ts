@@ -1,0 +1,1762 @@
+syntax = "proto3";
+
+import "Communication/Grpc/Protos/routing.proto";
+
+service KeyValuer {
+  rpc TrySetKeyValue (GrpcTrySetKeyValueRequest) returns (GrpcTrySetKeyValueResponse);
+  rpc TrySetManyKeyValue (GrpcTrySetManyKeyValueRequest) returns (GrpcTrySetManyKeyValueResponse);
+  rpc TryDeleteManyKeyValue (GrpcTryDeleteManyKeyValueRequest) returns (GrpcTryDeleteManyKeyValueResponse);
+  rpc TryExtendKeyValue (GrpcTryExtendKeyValueRequest) returns (GrpcTryExtendKeyValueResponse);
+  rpc TryDeleteKeyValue (GrpcTryDeleteKeyValueRequest) returns (GrpcTryDeleteKeyValueResponse);
+  rpc TryGetKeyValue (GrpcTryGetKeyValueRequest) returns (GrpcTryGetKeyValueResponse);
+  rpc TryExistsKeyValue (GrpcTryExistsKeyValueRequest) returns (GrpcTryExistsKeyValueResponse);
+  rpc TryGetManyValues (GrpcTryGetManyValuesRequest) returns (GrpcTryGetManyValuesResponse);
+  rpc TryExistsManyValues (GrpcTryExistsManyValuesRequest) returns (GrpcTryExistsManyValuesResponse);
+  rpc TryExecuteTransactionScript (GrpcTryExecuteTransactionScriptRequest) returns (GrpcTryExecuteTransactionScriptResponse);
+  rpc TryAcquireExclusiveLock (GrpcTryAcquireExclusiveLockRequest) returns (GrpcTryAcquireExclusiveLockResponse);
+  rpc TryAcquireManyExclusiveLocks (GrpcTryAcquireManyExclusiveLocksRequest) returns (GrpcTryAcquireManyExclusiveLocksResponse);
+  rpc TryAcquireExclusivePrefixLock (GrpcTryAcquireExclusivePrefixLockRequest) returns (GrpcTryAcquireExclusivePrefixLockResponse);
+  rpc TryAcquireExclusiveRangeLock (GrpcTryAcquireExclusiveRangeLockRequest) returns (GrpcTryAcquireExclusiveRangeLockResponse);
+  rpc TryReleaseExclusiveLock (GrpcTryReleaseExclusiveLockRequest) returns (GrpcTryReleaseExclusiveLockResponse);
+  rpc TryReleaseExclusivePrefixLock (GrpcTryReleaseExclusivePrefixLockRequest) returns (GrpcTryReleaseExclusivePrefixLockResponse);
+  rpc TryReleaseExclusiveRangeLock (GrpcTryReleaseExclusiveRangeLockRequest) returns (GrpcTryReleaseExclusiveRangeLockResponse);
+  rpc TryReleaseManyExclusiveLocks (GrpcTryReleaseManyExclusiveLocksRequest) returns (GrpcTryReleaseManyExclusiveLocksResponse);
+  rpc TryPrepareMutations (GrpcTryPrepareMutationsRequest) returns (GrpcTryPrepareMutationsResponse);
+  rpc TryPrepareManyMutations (GrpcTryPrepareManyMutationsRequest) returns (GrpcTryPrepareManyMutationsResponse);
+  rpc TryCommitMutations (GrpcTryCommitMutationsRequest) returns (GrpcTryCommitMutationsResponse);
+  rpc TryCommitManyMutations (GrpcTryCommitManyMutationsRequest) returns (GrpcTryCommitManyMutationsResponse);
+  rpc TryRollbackMutations (GrpcTryRollbackMutationsRequest) returns (GrpcTryRollbackMutationsResponse);
+  rpc TryRollbackManyMutations (GrpcTryRollbackManyMutationsRequest) returns (GrpcTryRollbackManyMutationsResponse);
+  rpc ScanByPrefix (GrpcScanByPrefixRequest) returns (GrpcScanByPrefixResponse);
+  rpc ScanAllByPrefix (GrpcScanAllByPrefixRequest) returns (GrpcScanAllByPrefixResponse);
+  rpc GetByBucket (GrpcGetByBucketRequest) returns (GrpcGetByBucketResponse);
+  rpc GetByRange (GrpcGetByRangeRequest) returns (GrpcGetByRangeResponse);
+  rpc GetByRangeStream (GrpcGetByRangeRequest) returns (stream GrpcGetByRangePageResponse);
+  rpc StartTransaction (GrpcStartTransactionRequest) returns (GrpcStartTransactionResponse);
+  rpc CommitTransaction (GrpcCommitTransactionRequest) returns (GrpcCommitTransactionResponse);
+  rpc RollbackTransaction (GrpcRollbackTransactionRequest) returns (GrpcRollbackTransactionResponse);
+  rpc BatchClientKeyValueRequests (stream GrpcBatchClientKeyValueRequest) returns (stream GrpcBatchClientKeyValueResponse);
+  rpc BatchServerKeyValueRequests (stream GrpcBatchServerKeyValueRequest) returns (stream GrpcBatchServerKeyValueResponse);
+  rpc RegisterKeyRange (GrpcRegisterKeyRangeRequest) returns (GrpcRegisterKeyRangeResponse);
+  rpc RemoveKeyRange (GrpcRemoveKeyRangeRequest) returns (GrpcRemoveKeyRangeResponse);
+  rpc AcquireSnapshotHold (GrpcAcquireSnapshotHoldRequest) returns (GrpcAcquireSnapshotHoldResponse);
+  rpc RenewSnapshotHold   (GrpcRenewSnapshotHoldRequest)   returns (GrpcRenewSnapshotHoldResponse);
+  rpc ReleaseSnapshotHold (GrpcReleaseSnapshotHoldRequest)  returns (GrpcReleaseSnapshotHoldResponse);
+  rpc GetSnapshotFloor    (GrpcGetSnapshotFloorRequest)     returns (GrpcGetSnapshotFloorResponse);
+}
+
+message GrpcTrySetKeyValueRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  optional bytes Value = 5;
+  optional bytes CompareValue = 6;
+  int64 CompareRevision = 7;
+  GrpcKeyValueFlags Flags = 8;
+  int32 ExpiresMs = 9;
+  GrpcKeyValueDurability Durability = 10;
+  int64 RoutedGeneration = 11;
+  string CoordinatorKey = 12;
+  uint64 OperationIdHigh = 13;
+  uint64 OperationIdLow = 14;
+}
+
+message GrpcTrySetKeyValueResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  int64 Revision = 3;
+  int32 LastModifiedNode = 4;
+  int64 LastModifiedPhysical = 5;
+  uint32 LastModifiedCounter = 6;
+  int32 TimeElapsedMs = 7;
+  // Additive advisory routing hint. Absent from a node that resolved no owner and from an
+  // older peer, which leaves the caller on its existing endpoint selection.
+  optional GrpcRouteHint Route = 8;
+}
+
+message GrpcTrySetManyKeyValueRequest {
+  repeated GrpcTrySetManyKeyValueRequestItem Items = 1;
+}
+
+message GrpcTrySetManyKeyValueRequestItem {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  optional bytes Value = 5;
+  optional bytes CompareValue = 6;
+  int64 CompareRevision = 7;
+  GrpcKeyValueFlags Flags = 8;
+  int32 ExpiresMs = 9;
+  GrpcKeyValueDurability Durability = 10;
+  int64 RoutedGeneration = 11;
+}
+
+message GrpcTrySetManyKeyValueResponse {
+  repeated GrpcTrySetManyKeyValueResponseItem Items = 1;
+  int32 TimeElapsedMs = 7;
+  // Deduplicated routing hints for the items below. An item points at one by index; a batch
+  // spanning several owners cannot be described by one response-level endpoint.
+  repeated GrpcRouteHint Routes = 3;
+}
+
+message GrpcTrySetManyKeyValueResponseItem {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  string Key = 3;
+  int64 Revision = 4;
+  int32 LastModifiedNode = 5;
+  int64 LastModifiedPhysical = 6;
+  uint32 LastModifiedCounter = 7;
+  GrpcKeyValueDurability Durability = 8;
+  // 1-based index into the response's Routes table; 0 when no route was resolved for this item.
+  int32 RouteIndex = 9;
+}
+
+message GrpcTryDeleteManyKeyValueRequest {
+  repeated GrpcTryDeleteManyKeyValueRequestItem Items = 1;
+  optional string CoordinatorKey = 2;
+  optional uint64 OperationIdHigh = 3;
+  optional uint64 OperationIdLow = 4;
+}
+
+message GrpcTryDeleteManyKeyValueRequestItem {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  GrpcKeyValueDurability Durability = 5;
+}
+
+message GrpcTryDeleteManyKeyValueResponse {
+  repeated GrpcTryDeleteManyKeyValueResponseItem Items = 1;
+  int32 TimeElapsedMs = 7;
+  // Deduplicated routing hints for the items below. An item points at one by index; a batch
+  // spanning several owners cannot be described by one response-level endpoint.
+  repeated GrpcRouteHint Routes = 3;
+}
+
+message GrpcTryDeleteManyKeyValueResponseItem {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  string Key = 3;
+  int64 Revision = 4;
+  int32 LastModifiedNode = 5;
+  int64 LastModifiedPhysical = 6;
+  uint32 LastModifiedCounter = 7;
+  GrpcKeyValueDurability Durability = 8;
+  // 1-based index into the response's Routes table; 0 when no route was resolved for this item.
+  int32 RouteIndex = 9;
+}
+
+message GrpcTryExtendKeyValueRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  int32 ExpiresMs = 5;
+  GrpcKeyValueDurability Durability = 6;
+  string CoordinatorKey = 7;
+  uint64 OperationIdHigh = 8;
+  uint64 OperationIdLow = 9;
+}
+
+message GrpcTryExtendKeyValueResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  int64 Revision = 3;
+  int32 LastModifiedNode = 4;
+  int64 LastModifiedPhysical = 5;
+  uint32 LastModifiedCounter = 6;
+  int32 TimeElapsedMs = 7;
+  // Additive advisory routing hint. Absent from a node that resolved no owner and from an
+  // older peer, which leaves the caller on its existing endpoint selection.
+  optional GrpcRouteHint Route = 8;
+}
+
+message GrpcTryDeleteKeyValueRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  GrpcKeyValueDurability Durability = 5;
+  string CoordinatorKey = 6;
+  uint64 OperationIdHigh = 7;
+  uint64 OperationIdLow = 8;
+}
+
+message GrpcTryDeleteKeyValueResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  int64 Revision = 3;
+  int32 LastModifiedNode = 4;
+  int64 LastModifiedPhysical = 5;
+  uint32 LastModifiedCounter = 6;
+  int32 TimeElapsedMs = 7;
+  // Additive advisory routing hint. Absent from a node that resolved no owner and from an
+  // older peer, which leaves the caller on its existing endpoint selection.
+  optional GrpcRouteHint Route = 8;
+}
+
+message GrpcTryGetKeyValueRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  int64 Revision = 5;
+  GrpcKeyValueDurability Durability = 6;
+  int32 ReadTimestampNode = 7;
+  int64 ReadTimestampPhysical = 8;
+  uint32 ReadTimestampCounter = 9;
+  string CoordinatorKey = 10;
+  uint64 OperationIdHigh = 11;
+  uint64 OperationIdLow = 12;
+}
+
+message GrpcTryGetKeyValueResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  optional bytes Value = 3;
+  int64 Revision = 4;
+  int32 ExpiresNode = 5;
+  int64 ExpiresPhysical = 6;
+  uint32 ExpiresCounter = 7;
+  int32 LastUsedNode = 8;
+  int64 LastUsedPhysical = 9;
+  uint32 LastUsedCounter = 10;
+  int32 LastModifiedNode = 11;
+  int64 LastModifiedPhysical = 12;
+  uint32 LastModifiedCounter = 13;
+  GrpcKeyValueState State = 14;
+  int32 TimeElapsedMs = 15;
+  // Additive advisory routing hint. Absent from a node that resolved no owner and from an
+  // older peer, which leaves the caller on its existing endpoint selection.
+  optional GrpcRouteHint Route = 16;
+}
+
+message GrpcTryExistsKeyValueRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  int64 Revision = 5;
+  GrpcKeyValueDurability Durability = 6;
+  int32 ReadTimestampNode = 7;
+  int64 ReadTimestampPhysical = 8;
+  uint32 ReadTimestampCounter = 9;
+  string CoordinatorKey = 10;
+  uint64 OperationIdHigh = 11;
+  uint64 OperationIdLow = 12;
+}
+
+message GrpcTryExistsKeyValueResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  int64 Revision = 3;
+  int32 ExpiresNode = 4;
+  int64 ExpiresPhysical = 5;
+  uint32 ExpiresCounter = 6;
+  int32 LastUsedNode = 7;
+  int64 LastUsedPhysical = 8;
+  uint32 LastUsedCounter = 9;
+  int32 LastModifiedNode = 10;
+  int64 LastModifiedPhysical = 11;
+  uint32 LastModifiedCounter = 12;
+  GrpcKeyValueState State = 13;
+  int32 TimeElapsedMs = 14;
+  // Additive advisory routing hint. Absent from a node that resolved no owner and from an
+  // older peer, which leaves the caller on its existing endpoint selection.
+  optional GrpcRouteHint Route = 15;
+}
+
+message GrpcTryManyValuesRequestItem {
+  string Key = 1;
+  int64 Revision = 2;
+  GrpcKeyValueDurability Durability = 3;
+}
+
+message GrpcTryGetManyValuesRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  repeated GrpcTryManyValuesRequestItem Items = 4;
+  int32 ReadTimestampNode = 5;
+  int64 ReadTimestampPhysical = 6;
+  uint32 ReadTimestampCounter = 7;
+}
+
+message GrpcTryGetManyValuesResponse {
+  optional string ServedFrom = 1;
+  repeated GrpcTryGetManyValuesResponseItem Items = 2;
+  // Deduplicated routing hints for the items below. An item points at one by index; a batch
+  // spanning several owners cannot be described by one response-level endpoint.
+  repeated GrpcRouteHint Routes = 3;
+}
+
+message GrpcTryGetManyValuesResponseItem {
+  GrpcKeyValueResponseType Type = 1;
+  string Key = 2;
+  GrpcKeyValueDurability Durability = 3;
+  optional bytes Value = 4;
+  int64 Revision = 5;
+  int32 ExpiresNode = 6;
+  int64 ExpiresPhysical = 7;
+  uint32 ExpiresCounter = 8;
+  int32 LastUsedNode = 9;
+  int64 LastUsedPhysical = 10;
+  uint32 LastUsedCounter = 11;
+  int32 LastModifiedNode = 12;
+  int64 LastModifiedPhysical = 13;
+  uint32 LastModifiedCounter = 14;
+  GrpcKeyValueState State = 15;
+  // 1-based index into the response's Routes table; 0 when no route was resolved for this item.
+  int32 RouteIndex = 16;
+}
+
+message GrpcTryExistsManyValuesRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  repeated GrpcTryManyValuesRequestItem Items = 4;
+  int32 ReadTimestampNode = 5;
+  int64 ReadTimestampPhysical = 6;
+  uint32 ReadTimestampCounter = 7;
+}
+
+message GrpcTryExistsManyValuesResponse {
+  optional string ServedFrom = 1;
+  repeated GrpcTryExistsManyValuesResponseItem Items = 2;
+  // Deduplicated routing hints for the items below. An item points at one by index; a batch
+  // spanning several owners cannot be described by one response-level endpoint.
+  repeated GrpcRouteHint Routes = 3;
+}
+
+message GrpcTryExistsManyValuesResponseItem {
+  GrpcKeyValueResponseType Type = 1;
+  string Key = 2;
+  GrpcKeyValueDurability Durability = 3;
+  int64 Revision = 4;
+  int32 ExpiresNode = 5;
+  int64 ExpiresPhysical = 6;
+  uint32 ExpiresCounter = 7;
+  int32 LastUsedNode = 8;
+  int64 LastUsedPhysical = 9;
+  uint32 LastUsedCounter = 10;
+  int32 LastModifiedNode = 11;
+  int64 LastModifiedPhysical = 12;
+  uint32 LastModifiedCounter = 13;
+  GrpcKeyValueState State = 14;
+  // 1-based index into the response's Routes table; 0 when no route was resolved for this item.
+  int32 RouteIndex = 15;
+}
+
+message GrpcTryExecuteTransactionScriptRequest {
+  optional string Hash = 1;
+  bytes Script = 2;
+  repeated GrpcKeyValueParameter Parameters = 3;
+  GrpcTransactionPriority Priority = 4;
+}
+
+message GrpcKeyValueParameter {
+  string Key = 1;
+  optional string Value = 2;
+}
+
+message GrpcTryExecuteTransactionScriptResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2; 
+  optional string Reason = 3;
+  repeated GrpcTryExecuteTransactionResponseValue Values = 4;
+  int32 TimeElapsedMs = 5;
+}
+
+message GrpcTryExecuteTransactionResponseValue {
+  string Key = 1;
+  optional bytes Value = 2;
+  int64 Revision = 3;
+  int32 ExpiresNode = 4;
+  int64 ExpiresPhysical = 5;
+  uint32 ExpiresCounter = 6;
+  int32 LastModifiedNode = 7;
+  int64 LastModifiedPhysical = 8;
+  uint32 LastModifiedCounter = 9;
+}
+
+message GrpcTryAcquireExclusiveLockRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  int32 ExpiresMs = 5;
+  GrpcKeyValueDurability Durability = 6;
+  string CoordinatorKey = 7;
+  uint64 OperationIdHigh = 8;
+  uint64 OperationIdLow = 9;
+}
+
+message GrpcTryAcquireExclusiveLockResponse {
+  optional string ServedFrom              = 1;
+  GrpcKeyValueResponseType Type           = 2;
+  int32  HolderTransactionIdNode          = 3;
+  int64  HolderTransactionIdPhysical      = 4;
+  uint32 HolderTransactionIdCounter       = 5;
+}
+
+message GrpcTryCheckWriteIntentRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  GrpcKeyValueDurability Durability = 5;
+}
+
+message GrpcTryCheckWriteIntentResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+}
+
+// Probes several keys owned by the same node for concurrent write intents in one call, so a commit
+// validating a large read set costs one round trip per node holding part of it rather than one per key.
+message GrpcTryCheckManyWriteIntentsRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  repeated GrpcTryCheckManyWriteIntentsRequestItem Items = 4;
+}
+
+message GrpcTryCheckManyWriteIntentsRequestItem {
+  string Key = 1;
+  GrpcKeyValueDurability Durability = 2;
+  // KeyValueConflictChecks bit set: which conflict classes to answer for this key
+  // (1 = concurrent write intent, 2 = foreign range lock, 4 = staged base moved). Selected per key
+  // because one probe carries a transaction's read set and its write set, which ask different questions.
+  uint32 Checks = 3;
+  // For the staged-base check (4): the committed base the caller's read-modify-write of this key was
+  // validated against — the revision when the base existed, or -1 when the validated base was
+  // "key does not exist". Ignored by every other check. Absent on the wire (0) only when the staged-base
+  // check is not requested, so the -1 sentinel is always explicit when it matters.
+  sint64 BaseRevision = 4;
+}
+
+message GrpcTryCheckManyWriteIntentsResponse {
+  optional string ServedFrom = 1;
+  repeated GrpcTryCheckManyWriteIntentsResponseItem Items = 2;
+}
+
+message GrpcTryCheckManyWriteIntentsResponseItem {
+  GrpcKeyValueResponseType Type = 1;
+  string Key = 2;
+  GrpcKeyValueDurability Durability = 3;
+}
+
+message GrpcTryAcquireExclusivePrefixLockRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string PrefixKey = 4;
+  int32 ExpiresMs = 5;
+  GrpcKeyValueDurability Durability = 6;
+  string CoordinatorKey = 7;
+  uint64 OperationIdHigh = 8;
+  uint64 OperationIdLow = 9;
+}
+
+message GrpcTryAcquireExclusivePrefixLockResponse {
+  optional string ServedFrom              = 1;
+  GrpcKeyValueResponseType Type           = 2;
+  int32  HolderTransactionIdNode          = 3;
+  int64  HolderTransactionIdPhysical      = 4;
+  uint32 HolderTransactionIdCounter       = 5;
+}
+
+message GrpcTryAcquireManyExclusiveLocksRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  repeated GrpcTryAcquireManyExclusiveLocksRequestItem Items = 4;
+}
+
+message GrpcTryAcquireManyExclusiveLocksResponse {
+  optional string ServedFrom = 1;
+  repeated GrpcTryAcquireManyExclusiveLocksResponseItem Items = 2;
+}
+
+message GrpcTryAcquireManyExclusiveLocksRequestItem {
+  string Key = 1;
+  int32 ExpiresMs = 2;
+  GrpcKeyValueDurability Durability = 3;
+}
+
+message GrpcTryAcquireManyExclusiveLocksResponseItem {
+  GrpcKeyValueResponseType Type           = 1;
+  string Key                              = 2;
+  GrpcKeyValueDurability Durability       = 3;
+  int32  HolderTransactionIdNode          = 4;
+  int64  HolderTransactionIdPhysical      = 5;
+  uint32 HolderTransactionIdCounter       = 6;
+}
+
+message GrpcTryReleaseManyExclusiveLocksRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  repeated GrpcTryReleaseManyExclusiveLocksRequestItem Items = 4;
+}
+
+message GrpcTryReleaseManyExclusiveLocksResponse {
+  optional string ServedFrom = 1;
+  repeated GrpcTryReleaseManyExclusiveLocksResponseItem Items = 2;
+}
+
+message GrpcTryReleaseManyExclusiveLocksRequestItem {
+  string Key = 1;
+  GrpcKeyValueDurability Durability = 2;
+}
+
+message GrpcTryReleaseManyExclusiveLocksResponseItem {
+  GrpcKeyValueResponseType Type = 1;
+  string Key = 2;
+  GrpcKeyValueDurability Durability = 3;
+}
+
+message GrpcTryReleaseExclusiveLockRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  GrpcKeyValueDurability Durability = 5;
+}
+
+message GrpcTryReleaseExclusiveLockResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+}
+
+message GrpcTryReleaseExclusivePrefixLockRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string PrefixKey = 4;
+  GrpcKeyValueDurability Durability = 5;
+}
+
+message GrpcTryReleaseExclusivePrefixLockResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+}
+
+message GrpcTryAcquireExclusiveRangeLockRequest {
+  int32  TransactionIdNode      = 1;
+  int64  TransactionIdPhysical  = 2;
+  uint32 TransactionIdCounter   = 3;
+  string Prefix                 = 4;
+  optional string StartKey      = 5;
+  bool   StartInclusive         = 6;
+  optional string EndKey        = 7;
+  bool   EndInclusive           = 8;
+  int32  ExpiresMs              = 9;
+  GrpcKeyValueDurability Durability = 10;
+  GrpcRangeLockMode Mode        = 11;
+  string CoordinatorKey         = 12;
+  uint64 OperationIdHigh        = 13;
+  uint64 OperationIdLow         = 14;
+}
+
+message GrpcTryAcquireExclusiveRangeLockResponse {
+  optional string ServedFrom              = 1;
+  GrpcKeyValueResponseType Type           = 2;
+  int32  HolderTransactionIdNode          = 3;
+  int64  HolderTransactionIdPhysical      = 4;
+  uint32 HolderTransactionIdCounter       = 5;
+}
+
+message GrpcTryReleaseExclusiveRangeLockRequest {
+  int32  TransactionIdNode      = 1;
+  int64  TransactionIdPhysical  = 2;
+  uint32 TransactionIdCounter   = 3;
+  string Prefix                 = 4;
+  optional string StartKey      = 5;
+  bool   StartInclusive         = 6;
+  optional string EndKey        = 7;
+  bool   EndInclusive           = 8;
+  GrpcKeyValueDurability Durability = 9;
+  // When set, the receiver runs the release on its own local actor state instead of re-routing
+  // through its locator. The sender targeted the node where the lock was acquired (a split/merge
+  // quiesce release); after a cutover the receiver's range map routes the bounds to the new
+  // partition, which would misdirect the release and strand its per-key write intents.
+  optional int32 TargetPartitionId = 10;
+}
+
+message GrpcTryReleaseExclusiveRangeLockResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+}
+
+message GrpcTryPrepareMutationsRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  int32 CommitIdNode = 4;
+  int64 CommitIdPhysical = 5;
+  uint32 CommitIdCounter = 6;
+  string Key = 7;
+  GrpcKeyValueDurability Durability = 8;
+  int64 RoutedGeneration = 9;
+  optional string RecordAnchorKey = 10;
+  // Serialized initial coordinator decision, present only on the anchor key's prepare of a Durable
+  // transaction, so a coordinator on a non-leader node still embeds the record into the anchor commit.
+  optional bytes EmbeddedDecision = 11;
+}
+
+message GrpcTryPrepareMutationsResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  int32 ProposalTicketNode = 3;
+  int64 ProposalTicketPhysical = 4;
+  uint32 ProposalTicketCounter = 5;
+}
+
+message GrpcTryPrepareManyMutationsRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  int32 CommitIdNode = 4;
+  int64 CommitIdPhysical = 5;
+  uint32 CommitIdCounter = 6;
+  repeated GrpcTryPrepareManyMutationsRequestItem Items = 7;
+  optional string RecordAnchorKey = 8;
+}
+
+message GrpcTryPrepareManyMutationsRequestItem {
+  string Key = 1;
+  GrpcKeyValueDurability Durability = 2;
+}
+
+message GrpcTryPrepareManyMutationsResponse {
+  optional string ServedFrom = 1;
+  repeated GrpcTryPrepareManyMutationsResponseItem Items = 3;
+}
+
+message GrpcTryPrepareManyMutationsResponseItem {
+  GrpcKeyValueResponseType Type = 1;
+  string Key = 2;
+  GrpcKeyValueDurability Durability = 3;
+  int32 ProposalTicketNode = 4;
+  int64 ProposalTicketPhysical = 5;
+  uint32 ProposalTicketCounter = 6;
+}
+
+message GrpcTryCommitMutationsRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  int32 ProposalTicketNode = 5;
+  int64 ProposalTicketPhysical = 6;
+  uint32 ProposalTicketCounter = 7;
+  GrpcKeyValueDurability Durability = 8;
+}
+
+message GrpcTryCommitMutationsResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  int64 ProposalIndex = 3;
+}
+
+message GrpcTryCommitManyMutationsRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  repeated GrpcTryCommitManyMutationsRequestItem Items = 4;
+}
+
+message GrpcTryCommitManyMutationsRequestItem {
+  string Key = 1;
+  int32 ProposalTicketNode = 2;
+  int64 ProposalTicketPhysical = 3;
+  uint32 ProposalTicketCounter = 4;
+  GrpcKeyValueDurability Durability = 5;
+}
+
+message GrpcTryCommitManyMutationsResponse {
+  optional string ServedFrom = 1;
+  repeated GrpcTryCommitManyMutationsResponseItem Items = 3;
+}
+
+message GrpcTryCommitManyMutationsResponseItem {
+  GrpcKeyValueResponseType Type = 1;
+  string Key = 2;
+  GrpcKeyValueDurability Durability = 3;
+  int64 ProposalIndex = 4;
+}
+
+message GrpcTryRollbackMutationsRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Key = 4;
+  int32 ProposalTicketNode = 5;
+  int64 ProposalTicketPhysical = 6;
+  uint32 ProposalTicketCounter = 7;
+  GrpcKeyValueDurability Durability = 8;
+}
+
+message GrpcTryRollbackMutationsResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  int64 ProposalIndex = 3;
+}
+
+message GrpcTryRollbackManyMutationsRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  repeated GrpcTryRollbackManyMutationsRequestItem Items = 4;
+}
+
+message GrpcTryRollbackManyMutationsRequestItem {
+  string Key = 1;
+  int32 ProposalTicketNode = 2;
+  int64 ProposalTicketPhysical = 3;
+  uint32 ProposalTicketCounter = 4;
+  GrpcKeyValueDurability Durability = 5;
+}
+
+message GrpcTryRollbackManyMutationsResponse {
+  optional string ServedFrom = 1;
+  repeated GrpcTryRollbackManyMutationsResponseItem Items = 3;
+}
+
+message GrpcTryRollbackManyMutationsResponseItem {
+  GrpcKeyValueResponseType Type = 1;
+  string Key = 2;
+  GrpcKeyValueDurability Durability = 3;
+  int64 ProposalIndex = 4;
+}
+
+message GrpcScanByPrefixRequest {
+  string PrefixKey = 1;
+  GrpcKeyValueDurability Durability = 2;
+  int32 ReadTimestampNode = 3;
+  int64 ReadTimestampPhysical = 4;
+  uint32 ReadTimestampCounter = 5;
+  bool IncludeTombstones = 6;
+}
+
+message GrpcScanByPrefixResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  repeated GrpcKeyValueByPrefixItemResponse Items = 3;
+}
+
+message GrpcGetByBucketRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string PrefixKey = 4;
+  GrpcKeyValueDurability Durability = 5;
+  int32 ReadTimestampNode = 6;
+  int64 ReadTimestampPhysical = 7;
+  uint32 ReadTimestampCounter = 8;
+  string CoordinatorKey = 9;
+  uint64 OperationIdHigh = 10;
+  uint64 OperationIdLow = 11;
+}
+
+message GrpcGetByBucketResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  repeated GrpcKeyValueByPrefixItemResponse Items = 3;
+}
+
+message GrpcGetByRangeRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  string Prefix = 4;
+  optional string StartKey = 5;
+  bool StartInclusive = 6;
+  optional string EndKey = 7;
+  bool EndInclusive = 8;
+  int32 Limit = 9;
+  int32 ReadTimestampNode = 10;
+  int64 ReadTimestampPhysical = 11;
+  uint32 ReadTimestampCounter = 12;
+  GrpcKeyValueDurability Durability = 13;
+  string CoordinatorKey = 14;
+  uint64 OperationIdHigh = 15;
+  uint64 OperationIdLow = 16;
+}
+
+message GrpcGetByRangePageResponse {
+  GrpcKeyValueResponseType Type = 1;
+  repeated GrpcKeyValueByPrefixItemResponse Items = 2;
+  optional string NextCursor = 3;
+  bool HasMore = 4;
+}
+
+message GrpcGetByRangeResponse {
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  repeated GrpcKeyValueByPrefixItemResponse Items = 3;
+  optional string NextCursor = 4;
+  bool HasMore = 5;
+}
+
+message GrpcScanAllByPrefixRequest {
+  string PrefixKey = 1;
+  GrpcKeyValueDurability Durability = 2;
+  int32 ReadTimestampNode = 3;
+  int64 ReadTimestampPhysical = 4;
+  uint32 ReadTimestampCounter = 5;
+}
+
+message GrpcScanAllByPrefixResponse {
+  GrpcKeyValueResponseType Type = 1;
+  repeated GrpcKeyValueByPrefixItemResponse Items = 2;
+}
+
+message GrpcStartTransactionRequest
+{
+  string CoordinatorKey = 1;
+  GrpcLockingType LockingType = 2;
+  int32 Timeout = 3;
+  bool AsyncRelease = 4;
+  bool AutoCommit = 5;
+  GrpcReadValidation ReadValidation = 6;
+  GrpcDecisionDurability DecisionDurability = 7;
+  int32 ReadTimestampNode = 8;
+  int64 ReadTimestampPhysical = 9;
+  uint32 ReadTimestampCounter = 10;
+  GrpcTransactionPriority Priority = 11;
+  // How long the caller will queue for an admission slot. Distinct from Timeout, which is the session's
+  // lifetime. Zero means "use the server default"; the server clamps it to its own maximum.
+  int32 AdmissionWaitMs = 12;
+}
+
+message GrpcStartTransactionResponse
+{
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  int32 TransactionIdNode = 3;
+  int64 TransactionIdPhysical = 4;
+  uint32 TransactionIdCounter = 5;
+}
+
+message GrpcCommitTransactionRequest
+{
+  string CoordinatorKey = 1;
+  int32 TransactionIdNode = 2;
+  int64 TransactionIdPhysical = 3;
+  uint32 TransactionIdCounter = 4;
+  optional string RecordAnchorKey = 5;
+}
+
+message GrpcRollbackTransactionRequest
+{
+  string CoordinatorKey = 1;
+  int32 TransactionIdNode = 2;
+  int64 TransactionIdPhysical = 3;
+  uint32 TransactionIdCounter = 4;
+  optional string RecordAnchorKey = 5;
+}
+
+message GrpcTransactionModifiedKey
+{
+  string Key = 1;
+  GrpcKeyValueDurability Durability = 2;
+}
+
+message GrpcTransactionReadKey
+{
+  string Key = 1;
+  GrpcKeyValueDurability Durability = 2;
+  bool Exists = 3;
+  int64 Revision = 4;
+}
+
+// The actor-confirmed committed value of one persistent modified key, echoed from the participant to the
+// coordinator so it can stage the mutation losslessly and finalize through the durable-intent path (not the
+// manual ticket path). State carries whether the operation was a set or a delete, so a set with an absent
+// value (a key that exists and holds no value) stays distinct from a deletion; value presence alone cannot
+// tell them apart. An absent Value is distinct from an empty value. ExpiresMs is the relative TTL in ms
+// (0 = none); NoRevision carries whether the write suppressed history retention. A reader receiving
+// STATE_UNDEFINED (an older sender) falls back to value presence: absent = deleted, present = set.
+message GrpcStagedMutationEffect
+{
+  string Key = 1;
+  optional bytes Value = 2;
+  int64 Revision = 3;
+  int64 ExpiresMs = 4;
+  bool NoRevision = 5;
+  GrpcKeyValueState State = 6;
+}
+
+message GrpcCommitTransactionResponse
+{
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  optional string RecordAnchorKey = 3;
+}
+
+message GrpcRollbackTransactionResponse
+{
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+}
+
+// ── Register-remote operation registration (inter-node) ─────────────────────────────────
+
+// Values mirror the server-side OperationKind exactly: the inter-node transport blind-casts the C# enum
+// integer onto this field, so these numbers ARE the wire meaning. Keep them in lockstep with OperationKind
+// and never renumber an existing member.
+enum GrpcOperationKind {
+  GRPC_OP_KIND_SET = 0;
+  GRPC_OP_KIND_DELETE = 1;
+  GRPC_OP_KIND_DELETE_MANY = 2;
+  GRPC_OP_KIND_EXTEND = 3;
+  GRPC_OP_KIND_GET = 4;
+  GRPC_OP_KIND_EXISTS = 5;
+  GRPC_OP_KIND_SCAN = 6;
+  GRPC_OP_KIND_POINT_LOCK = 7;
+  GRPC_OP_KIND_PREFIX_LOCK = 8;
+  GRPC_OP_KIND_RANGE_LOCK = 9;
+  GRPC_OP_KIND_SET_MANY = 10;
+  GRPC_OP_KIND_MANY_POINT_LOCK = 11;
+  GRPC_OP_KIND_GET_MANY = 12;
+  GRPC_OP_KIND_EXISTS_MANY = 13;
+}
+
+enum GrpcOperationRegistrationOutcome {
+  GRPC_OP_OUTCOME_NEW = 0;
+  GRPC_OP_OUTCOME_ALREADY_PENDING = 1;
+  GRPC_OP_OUTCOME_ALREADY_COMPLETED = 2;
+  GRPC_OP_OUTCOME_REJECTED_SESSION_CLOSED = 3;
+  GRPC_OP_OUTCOME_REJECTED_DUPLICATE = 4;
+  GRPC_OP_OUTCOME_REJECTED_CAPACITY = 5;
+}
+
+message GrpcTransactionRangeLock
+{
+  string Prefix = 1;
+  optional string StartKey = 2;
+  bool StartInclusive = 3;
+  optional string EndKey = 4;
+  bool EndInclusive = 5;
+  GrpcKeyValueDurability Durability = 6;
+  GrpcRangeLockMode Mode = 7;
+}
+
+message GrpcTransactionWorkingSet
+{
+  repeated GrpcTransactionModifiedKey ModifiedKeys = 1;
+  repeated GrpcTransactionModifiedKey AcquiredLocks = 2;
+  repeated GrpcTransactionModifiedKey AcquiredPrefixLocks = 3;
+  repeated GrpcTransactionRangeLock AcquiredRangeLocks = 4;
+  repeated GrpcTransactionReadKey ReadKeys = 5;
+  int32 PendingOperationCount = 6;
+  optional string RecordAnchorKey = 7;
+}
+
+message GrpcBeginOperationRequest
+{
+  string CoordinatorKey = 1;
+  int32 TransactionIdNode = 2;
+  int64 TransactionIdPhysical = 3;
+  uint32 TransactionIdCounter = 4;
+  uint64 OperationIdHigh = 5;
+  uint64 OperationIdLow = 6;
+  GrpcOperationKind Kind = 7;
+  optional bytes PayloadDigest = 8;
+}
+
+message GrpcBeginOperationResponse
+{
+  optional string ServedFrom = 1;
+  GrpcOperationRegistrationOutcome Outcome = 2;
+  GrpcKeyValueResponseType CachedType = 3;
+  int64 CachedRevision = 4;
+  int32 CachedTimestampNode = 5;
+  int64 CachedTimestampPhysical = 6;
+  uint32 CachedTimestampCounter = 7;
+  optional string RecordAnchorKey = 8;
+}
+
+message GrpcCompleteOperationRequest
+{
+  string CoordinatorKey = 1;
+  int32 TransactionIdNode = 2;
+  int64 TransactionIdPhysical = 3;
+  uint32 TransactionIdCounter = 4;
+  uint64 OperationIdHigh = 5;
+  uint64 OperationIdLow = 6;
+  optional string ModifiedKey = 7;
+  optional string AcquiredPointLock = 8;
+  optional string ReleasedPointLock = 9;
+  optional string AcquiredPrefixLock = 10;
+  optional string ReleasedPrefixLock = 11;
+  optional GrpcTransactionRangeLock AcquiredRangeLock = 12;
+  optional GrpcTransactionRangeLock ReleasedRangeLock = 13;
+  optional GrpcTransactionReadKey Read = 14;
+  repeated GrpcTransactionReadKey ReadObservations = 15;
+  repeated GrpcTransactionModifiedKey ModifiedKeys = 22;
+  repeated GrpcStagedMutationEffect StagedMutations = 23;
+  repeated GrpcTransactionModifiedKey AcquiredPointLocks = 24;
+  GrpcKeyValueDurability Durability = 16;
+  GrpcKeyValueResponseType CachedType = 17;
+  int64 CachedRevision = 18;
+  int32 CachedTimestampNode = 19;
+  int64 CachedTimestampPhysical = 20;
+  uint32 CachedTimestampCounter = 21;
+}
+
+message GrpcCompleteOperationResponse
+{
+  optional string ServedFrom = 1;
+  optional string RecordAnchorKey = 2;
+  bool Acknowledged = 3;
+}
+
+message GrpcGetTransactionWorkingSetRequest
+{
+  string CoordinatorKey = 1;
+  int32 TransactionIdNode = 2;
+  int64 TransactionIdPhysical = 3;
+  uint32 TransactionIdCounter = 4;
+}
+
+message GrpcGetTransactionWorkingSetResponse
+{
+  optional string ServedFrom = 1;
+  bool Found = 2;
+  GrpcTransactionWorkingSet WorkingSet = 3;
+}
+
+message GrpcCloseTransactionRequest
+{
+  string CoordinatorKey = 1;
+  int32 TransactionIdNode = 2;
+  int64 TransactionIdPhysical = 3;
+  uint32 TransactionIdCounter = 4;
+}
+
+message GrpcCloseTransactionResponse
+{
+  optional string ServedFrom = 1;
+  GrpcKeyValueResponseType Type = 2;
+  bool HasWorkingSet = 3;
+  GrpcTransactionWorkingSet WorkingSet = 4;
+}
+
+message GrpcKeyValueByPrefixItemResponse {
+  string Key = 1;
+  optional bytes Value = 2;
+  int64 Revision = 3;
+  int32 ExpiresNode = 4;
+  int64 ExpiresPhysical = 5;
+  uint32 ExpiresCounter = 6;
+  int32 LastUsedNode = 7;
+  int64 LastUsedPhysical = 8;
+  uint32 LastUsedCounter = 9;
+  int32 LastModifiedNode = 10;
+  int64 LastModifiedPhysical = 11;
+  uint32 LastModifiedCounter = 12;
+  GrpcKeyValueState State = 13;
+}
+
+message GrpcBatchClientKeyValueRequest {
+  GrpcClientBatchType Type = 1;
+  int32 RequestId = 2;
+  oneof payload {
+    GrpcTrySetKeyValueRequest TrySetKeyValue = 3;
+    GrpcTrySetManyKeyValueRequest TrySetManyKeyValue = 4;
+    GrpcTryGetKeyValueRequest TryGetKeyValue = 5;
+    GrpcTryDeleteKeyValueRequest TryDeleteKeyValue = 6;
+    GrpcTryExtendKeyValueRequest TryExtendKeyValue = 7;
+    GrpcTryExistsKeyValueRequest TryExistsKeyValue = 8;
+    GrpcTryExecuteTransactionScriptRequest TryExecuteTransactionScript = 9;
+    GrpcTryAcquireExclusiveLockRequest TryAcquireExclusiveLock = 10;
+    GrpcGetByBucketRequest GetByBucket = 11;
+    GrpcScanAllByPrefixRequest ScanByPrefix = 12;    
+    GrpcStartTransactionRequest StartTransaction = 13;
+    GrpcCommitTransactionRequest CommitTransaction = 14;
+    GrpcRollbackTransactionRequest RollbackTransaction = 15;
+    GrpcTryDeleteManyKeyValueRequest TryDeleteManyKeyValue = 16;
+  }
+}
+
+message GrpcBatchClientKeyValueResponse
+{
+  GrpcClientBatchType Type = 1;
+  int32 RequestId = 2;
+  oneof payload {
+    GrpcTrySetKeyValueResponse TrySetKeyValue = 3;
+    GrpcTrySetManyKeyValueResponse TrySetManyKeyValue = 4;
+    GrpcTryGetKeyValueResponse TryGetKeyValue = 5;
+    GrpcTryDeleteKeyValueResponse TryDeleteKeyValue = 6;
+    GrpcTryExtendKeyValueResponse TryExtendKeyValue = 7;
+    GrpcTryExistsKeyValueResponse TryExistsKeyValue = 8;
+    GrpcTryExecuteTransactionScriptResponse TryExecuteTransactionScript = 9;
+    GrpcTryAcquireExclusiveLockResponse TryAcquireExclusiveLock = 10;
+    GrpcGetByBucketResponse GetByBucket = 11;
+    GrpcScanAllByPrefixResponse ScanByPrefix = 12;
+    GrpcStartTransactionResponse StartTransaction = 13;
+    GrpcCommitTransactionResponse CommitTransaction = 14;
+    GrpcRollbackTransactionResponse RollbackTransaction = 15;
+    GrpcTryDeleteManyKeyValueResponse TryDeleteManyKeyValue = 16;
+  }
+}
+
+message GrpcBatchServerKeyValueRequest {
+  GrpcServerBatchType Type = 1;
+  int32 RequestId = 2;
+  // How many times this operation was already forwarded when the sender wrote it, this hop
+  // included. The receiver serves under that count so the forward budget spans the whole chain
+  // instead of restarting at every node. Absent (0) from an older peer still means "forwarded".
+  int32 ForwardHops = 4;
+  oneof payload {
+    GrpcTrySetKeyValueRequest TrySetKeyValue = 3;
+    GrpcTrySetManyKeyValueRequest TrySetManyKeyValue = 5;
+    GrpcTryGetKeyValueRequest TryGetKeyValue = 6;
+    GrpcTryDeleteKeyValueRequest TryDeleteKeyValue = 7;
+    GrpcTryExtendKeyValueRequest TryExtendKeyValue = 8;
+    GrpcTryExistsKeyValueRequest TryExistsKeyValue = 9;
+    GrpcTryGetManyValuesRequest TryGetManyValues = 10;
+    GrpcTryExistsManyValuesRequest TryExistsManyValues = 11;
+    GrpcTryExecuteTransactionScriptRequest TryExecuteTransactionScript = 12;
+    GrpcTryAcquireExclusiveLockRequest TryAcquireExclusiveLock = 13;
+    GrpcTryAcquireExclusivePrefixLockRequest TryAcquireExclusivePrefixLock = 14;
+    GrpcTryAcquireManyExclusiveLocksRequest TryAcquireManyExclusiveLocks = 15;
+    GrpcTryReleaseExclusiveLockRequest TryReleaseExclusiveLock = 16;
+    GrpcTryReleaseExclusivePrefixLockRequest TryReleaseExclusivePrefixLock = 17;
+    GrpcTryReleaseManyExclusiveLocksRequest TryReleaseManyExclusiveLocks = 18;
+    GrpcTryPrepareMutationsRequest TryPrepareMutations = 19;
+    GrpcTryPrepareManyMutationsRequest TryPrepareManyMutations = 20;
+    GrpcTryCommitMutationsRequest TryCommitMutations = 21;
+    GrpcTryCommitManyMutationsRequest TryCommitManyMutations = 22;
+    GrpcTryRollbackMutationsRequest TryRollbackMutations = 23;
+    GrpcTryRollbackManyMutationsRequest TryRollbackManyMutations = 24;
+    GrpcGetByBucketRequest GetByBucket = 25;
+    GrpcScanByPrefixRequest ScanByPrefix = 26;
+    GrpcStartTransactionRequest StartTransaction = 27;
+    GrpcCommitTransactionRequest CommitTransaction = 28;
+    GrpcRollbackTransactionRequest RollbackTransaction = 29;
+    GrpcGetByRangeRequest GetByRange = 30;
+    GrpcTryDeleteManyKeyValueRequest TryDeleteManyKeyValue = 31;
+    GrpcTryCheckWriteIntentRequest TryCheckWriteIntent = 32;
+    GrpcTryAcquireExclusiveRangeLockRequest TryAcquireExclusiveRangeLock = 33;
+    GrpcTryReleaseExclusiveRangeLockRequest TryReleaseExclusiveRangeLock = 34;
+    GrpcEnsureKeyRangeSeededRequest EnsureKeyRangeSeeded = 35;
+    GrpcGetRangeLocksRequest GetRangeLocks = 36;
+    GrpcImportRangeLocksRequest ImportRangeLocks = 37;
+    GrpcAcquireSnapshotHoldRequest AcquireSnapshotHold = 38;
+    GrpcRenewSnapshotHoldRequest   RenewSnapshotHold   = 39;
+    GrpcReleaseSnapshotHoldRequest ReleaseSnapshotHold = 40;
+    GrpcGetSnapshotFloorRequest GetSnapshotFloor = 41;
+    GrpcEnsureKeyRangeRemovedRequest EnsureKeyRangeRemoved = 42;
+    GrpcBeginOperationRequest BeginOperation = 43;
+    GrpcCompleteOperationRequest CompleteOperation = 44;
+    GrpcGetTransactionWorkingSetRequest GetTransactionWorkingSet = 45;
+    GrpcCloseTransactionRequest CloseTransaction = 46;
+    GrpcImportCompletionReceiptsRequest ImportCompletionReceipts = 47;
+    GrpcImportCoordinatorDecisionsRequest ImportCoordinatorDecisions = 48;
+    GrpcDurableOperationRequest DurableOperation = 49;
+    GrpcLookupTransactionRecordRequest LookupTransactionRecord = 50;
+    GrpcTryCheckManyWriteIntentsRequest TryCheckManyWriteIntents = 51;
+    GrpcReplicateKeyValueRangePageRequest ReplicateKeyValueRangePage = 52;
+    GrpcGetRangeTransactionStateRequest GetRangeTransactionState = 53;
+    GrpcGetStagedBaseVerdictsRequest GetStagedBaseVerdicts = 54;
+    GrpcDurableBundleRequest DurableBundle = 55;
+    GrpcDurableDecisionRequest DurableDecision = 56;
+    GrpcDurableOnePhaseRequest DurableOnePhase = 57;
+  }
+  // Set only when Type is SERVER_COALESCED: independent single-operation envelopes that share
+  // this one stream message. Each inner envelope carries its own RequestId, Type, ForwardHops
+  // and payload; the carrier's own RequestId and payload stay empty. Inner envelopes never nest.
+  repeated GrpcBatchServerKeyValueRequest Coalesced = 58;
+}
+
+message GrpcBatchServerKeyValueResponse
+{
+  GrpcServerBatchType Type = 1;
+  int32 RequestId = 2;
+  oneof payload {
+    GrpcTrySetKeyValueResponse TrySetKeyValue = 3;
+    GrpcTrySetManyKeyValueResponse TrySetManyKeyValue = 4;
+    GrpcTryGetKeyValueResponse TryGetKeyValue = 5;
+    GrpcTryDeleteKeyValueResponse TryDeleteKeyValue = 6;
+    GrpcTryExtendKeyValueResponse TryExtendKeyValue = 7;
+    GrpcTryExistsKeyValueResponse TryExistsKeyValue = 8;
+    GrpcTryGetManyValuesResponse TryGetManyValues = 9;
+    GrpcTryExistsManyValuesResponse TryExistsManyValues = 10;
+    GrpcTryExecuteTransactionScriptResponse TryExecuteTransactionScript = 11;
+    GrpcTryAcquireExclusiveLockResponse TryAcquireExclusiveLock = 12;
+    GrpcTryAcquireExclusivePrefixLockResponse TryAcquireExclusivePrefixLock = 13;
+    GrpcTryAcquireManyExclusiveLocksResponse TryAcquireManyExclusiveLocks = 14;
+    GrpcTryReleaseExclusiveLockResponse TryReleaseExclusiveLock = 15;
+    GrpcTryReleaseExclusivePrefixLockResponse TryReleaseExclusivePrefixLock = 16;
+    GrpcTryReleaseManyExclusiveLocksResponse TryReleaseManyExclusiveLocks = 17;
+    GrpcTryPrepareMutationsResponse TryPrepareMutations = 18;
+    GrpcTryPrepareManyMutationsResponse TryPrepareManyMutations = 19;
+    GrpcTryCommitMutationsResponse TryCommitMutations = 20;
+    GrpcTryCommitManyMutationsResponse TryCommitManyMutations = 21;
+    GrpcTryRollbackMutationsResponse TryRollbackMutations = 22;
+    GrpcTryRollbackManyMutationsResponse TryRollbackManyMutations = 23;
+    GrpcGetByBucketResponse GetByBucket = 24;
+    GrpcScanByPrefixResponse ScanByPrefix = 25;
+    GrpcStartTransactionResponse StartTransaction = 26;
+    GrpcCommitTransactionResponse CommitTransaction = 27;
+    GrpcRollbackTransactionResponse RollbackTransaction = 28;
+    GrpcGetByRangeResponse GetByRange = 29;
+    GrpcTryDeleteManyKeyValueResponse TryDeleteManyKeyValue = 30;
+    GrpcTryCheckWriteIntentResponse TryCheckWriteIntent = 31;
+    GrpcTryAcquireExclusiveRangeLockResponse TryAcquireExclusiveRangeLock = 32;
+    GrpcTryReleaseExclusiveRangeLockResponse TryReleaseExclusiveRangeLock = 33;
+    GrpcEnsureKeyRangeSeededResponse EnsureKeyRangeSeeded = 34;
+    GrpcGetRangeLocksResponse GetRangeLocks = 35;
+    GrpcImportRangeLocksResponse ImportRangeLocks = 36;
+    GrpcAcquireSnapshotHoldResponse AcquireSnapshotHold = 37;
+    GrpcRenewSnapshotHoldResponse   RenewSnapshotHold   = 38;
+    GrpcReleaseSnapshotHoldResponse ReleaseSnapshotHold = 39;
+    GrpcGetSnapshotFloorResponse GetSnapshotFloor = 40;
+    GrpcEnsureKeyRangeRemovedResponse EnsureKeyRangeRemoved = 41;
+    GrpcBeginOperationResponse BeginOperation = 42;
+    GrpcCompleteOperationResponse CompleteOperation = 43;
+    GrpcGetTransactionWorkingSetResponse GetTransactionWorkingSet = 44;
+    GrpcCloseTransactionResponse CloseTransaction = 45;
+    GrpcImportCompletionReceiptsResponse ImportCompletionReceipts = 46;
+    GrpcImportCoordinatorDecisionsResponse ImportCoordinatorDecisions = 47;
+    GrpcDurableOperationResponse DurableOperation = 48;
+    GrpcLookupTransactionRecordResponse LookupTransactionRecord = 49;
+    GrpcTryCheckManyWriteIntentsResponse TryCheckManyWriteIntents = 50;
+    GrpcReplicateKeyValueRangePageResponse ReplicateKeyValueRangePage = 51;
+    GrpcGetRangeTransactionStateResponse GetRangeTransactionState = 52;
+    GrpcGetStagedBaseVerdictsResponse GetStagedBaseVerdicts = 53;
+    GrpcDurableBundleResponse DurableBundle = 54;
+    GrpcDurableDecisionResponse DurableDecision = 55;
+    GrpcDurableOnePhaseResponse DurableOnePhase = 56;
+  }
+  // Set only when Type is SERVER_COALESCED: independent single-operation responses that share
+  // this one stream message.
+  repeated GrpcBatchServerKeyValueResponse Coalesced = 57;
+}
+
+message GrpcRegisterKeyRangeRequest {
+  string KeySpace = 1;
+}
+
+message GrpcRegisterKeyRangeResponse {
+  bool   Success = 1;
+  string Status = 2;
+  bool   Seeded = 3;
+  string RoutingMode = 4;
+  int32  DescriptorCount = 5;
+  string Reason = 6;
+}
+
+message GrpcRemoveKeyRangeRequest {
+  string KeySpace = 1;
+}
+
+message GrpcRemoveKeyRangeResponse {
+  bool   Success = 1;
+  // Removed, Indeterminate, QuiesceWindowOpen, InvalidInput or KeyRangeDisabled.
+  string Status = 2;
+  // How the answering node routes the space after the call. Removal clears the mode through
+  // replication, so it can still read KeyRange between the commit and this node applying it.
+  string RoutingMode = 3;
+  // Descriptors still visible on the answering node; 0 on success.
+  int32  DescriptorCount = 4;
+  string Reason = 5;
+}
+
+message GrpcEnsureKeyRangeSeededRequest {
+  string KeySpace = 1;
+}
+
+message GrpcEnsureKeyRangeSeededResponse {
+  bool Success = 1;
+}
+
+message GrpcEnsureKeyRangeRemovedRequest {
+  string KeySpace = 1;
+}
+
+message GrpcEnsureKeyRangeRemovedResponse {
+  bool Success = 1;
+}
+
+message GrpcRangeLockEntry {
+  int32  TransactionIdNode      = 1;
+  int64  TransactionIdPhysical  = 2;
+  uint32 TransactionIdCounter   = 3;
+  optional string StartKey      = 4;
+  bool   StartInclusive         = 5;
+  optional string EndKey        = 6;
+  bool   EndInclusive           = 7;
+  GrpcRangeLockMode Mode        = 8;
+  int32  ExpiresNode            = 9;
+  int64  ExpiresPhysical        = 10;
+  uint32 ExpiresCounter         = 11;
+}
+
+message GrpcGetRangeLocksRequest {
+  string KeySpace = 1;
+}
+
+message GrpcGetRangeLocksResponse {
+  repeated GrpcRangeLockEntry Locks = 1;
+}
+
+message GrpcImportRangeLocksRequest {
+  string KeySpace = 1;
+  repeated GrpcRangeLockEntry Locks = 2;
+}
+
+message GrpcImportRangeLocksResponse {
+  bool Success = 1;
+}
+
+message GrpcCompletionReceiptEntry {
+  int32  TransactionIdNode     = 1;
+  int64  TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter  = 3;
+  string Key                   = 4;
+  optional string RecordAnchorKey = 5;
+  int32  Durability            = 6;
+}
+
+message GrpcImportCompletionReceiptsRequest {
+  repeated GrpcCompletionReceiptEntry Receipts = 1;
+  // Data partition whose Raft log the receipts must be replicated onto so every replica of the
+  // destination range holds them after a split/merge handoff. Zero when the message is reused as an
+  // on-disk snapshot container (no destination routing needed).
+  int32 DestinationPartitionId = 2;
+  // When true the batch forgets the listed receipts on every replica of the partition (a durable
+  // coordinator acknowledgement releasing the proof) instead of recording them.
+  bool Forget = 3;
+}
+
+message GrpcImportCompletionReceiptsResponse {
+  bool Success = 1;
+}
+
+// One bounded, checksummed page of key-values being moved by a range split/merge, forwarded to the
+// destination partition's leader so it replicates the page's entries onto that partition's Raft log —
+// every replica of the destination applies them, and a leader change mid-copy loses nothing. The page
+// bytes are a serialized RangeSnapshotPage (the same checksummed frame the range transfer uses).
+message GrpcReplicateKeyValueRangePageRequest {
+  int32 PartitionId = 1;
+  bytes Page = 2;
+}
+
+message GrpcReplicateKeyValueRangePageResponse {
+  bool Success = 1;
+}
+
+// Reads the transaction state a moving key range carries — completion receipts, canonical transaction
+// records and prepared intents whose key/anchor falls in [StartKey, EndKey) — from the node that leads
+// the source partition, whose stores are authoritative. Used by split/merge to gather the handoff set
+// when the driving node is not a replica of the source range. Absent bounds mean -inf / +inf.
+message GrpcGetRangeTransactionStateRequest {
+  optional string StartKey = 1;
+  optional string EndKey = 2;
+  // The source partition whose confirmed leader must answer: a follower's stores can lag the
+  // newest prepared intent, and a handoff missing an intent strands its transaction after cutover.
+  int32 PartitionId = 3;
+  // Bitmask selecting which state kinds the response carries: 1 receipts, 2 records, 4 intents.
+  // 0 (unset) means all three — the pre-paging wire behaviour, which an old peer also answers with.
+  int32 Kinds = 4;
+  // Resume strictly after this range key (the receipt/intent key, or the record's anchor key).
+  // The number of items in a busy range has no ceiling, so an unpaged response can exceed the
+  // transport's message limit; the caller pages instead. Absent means "from StartKey".
+  optional string Cursor = 5;
+  // Cap on the items in this page. Applied only when exactly one kind is selected — a shared
+  // cursor cannot page heterogeneous kinds. Items that share one range key never straddle a page
+  // (the resume is strictly-after by key), so a page can exceed the cap by that key's items.
+  // 0 means unbounded (the pre-paging behaviour).
+  int32 MaxItems = 6;
+}
+
+message GrpcGetRangeTransactionStateResponse {
+  bool Success = 1;
+  repeated GrpcCompletionReceiptEntry Receipts = 2;
+  // Serialized TransactionRecordSnapshotMessage / PreparedIntentSnapshotMessage blobs, empty when none.
+  bytes TransactionRecords = 3;
+  bytes PreparedIntents = 4;
+  // True when the page was cut by MaxItems and more items remain past NextCursor. An old peer
+  // never sets it — its response already carried everything.
+  bool HasMore = 5;
+  optional string NextCursor = 6;
+}
+
+// A batch of coordinator decision records serialized as one CoordinatorDecisionSnapshotMessage blob.
+message GrpcImportCoordinatorDecisionsRequest {
+  bytes Records = 1;
+  // Data partition whose Raft log the decision records must be replicated onto so every replica of
+  // the destination range holds them after a split/merge handoff.
+  int32 DestinationPartitionId = 2;
+}
+
+message GrpcImportCoordinatorDecisionsResponse {
+  bool Success = 1;
+}
+
+// A durable-intent 2PC operation forwarded from the coordinator to the partition leader node so it runs where the
+// node is the Raft leader (proposals) and holds the staged write intent (commit/rollback apply).
+message GrpcDurableOperationRequest {
+  int32 PartitionId = 1;
+  int32 Kind = 2;        // 0 = replicate delta, 1 = commit-apply, 2 = rollback-apply
+  string LogType = 3;    // replicate only (the Raft log type)
+  bytes Payload = 4;     // the serialized delta (replicate) or the serialized prepared intent (commit/rollback)
+}
+
+message GrpcDurableOperationResponse {
+  bool Committed = 1;    // replicate: whether the batch committed; commit/rollback: applied
+}
+
+// Asks a replica of one data partition for its staged-base fence verdict on each of one transaction's
+// validated-base prepares, judged against the replica's own applied intent and committed-head memory. The
+// pre-decision half of the replica fence: the commit is proposed only after these verdicts are read, so a
+// refusal that previously raced the commit as a detached veto now arrives ahead of it. Answered by any
+// replica — no leader confirmation, because the verdict is about THIS node's memory.
+message GrpcGetStagedBaseVerdictsRequest {
+  int32 PartitionId = 1;
+  int32 TransactionIdNode = 2;
+  int64 TransactionIdPhysical = 3;
+  uint32 TransactionIdCounter = 4;
+  int64 Epoch = 5;
+  repeated string Keys = 6;
+  // How long the replica may wait for the prepare to apply locally before answering NotApplied for the
+  // remaining keys. Bounded server-side; 0 answers immediately.
+  int32 WaitMs = 7;
+}
+
+// One key's verdict: 0 NotApplied (this node holds no matching intent and cannot attest), 1 Clear,
+// 2 StaleBase (the fence memory proves the validated base moved). HeadRevision is the committed head the
+// verdict was judged against, -1 when the memory held nothing for the key.
+message GrpcStagedBaseVerdict {
+  int32 Verdict = 1;
+  int64 HeadRevision = 2;
+}
+
+message GrpcGetStagedBaseVerdictsResponse {
+  bool Serviced = 1;
+  // Aligned with the request's Keys, in order.
+  repeated GrpcStagedBaseVerdict Verdicts = 2;
+}
+
+// A linearizable lookup of a transaction's canonical record, routed from a consult site to the partition leader
+// that owns the record's anchor key so the answer is authoritative rather than a node-local projection.
+// One ordered entry of a durable bundle: the Raft log type and the serialized delta.
+message GrpcDurableBundleEntry {
+  string LogType = 1;
+  bytes Payload = 2;
+}
+
+// Forwards an ordered group of durable-2PC deltas to a partition leader as ONE atomic scheduler submission
+// (record init + prepare for an anchor, or a single prepare), carrying the origin's admission class and the
+// range fence it froze the partition against, so the receiver admits and re-fences exactly as the origin's
+// own scheduler would have. Independent per-entry forwards are not an atomic bundle; this is.
+message GrpcDurableBundleRequest {
+  int32 PartitionId = 1;
+  repeated GrpcDurableBundleEntry Entries = 2;
+  int32 AdmissionClass = 3;   // 0 ordinary, 1 terminal (Kahuna's WriteAdmissionClass)
+  string FenceKey = 4;        // empty = unfenced
+  int64 FenceGeneration = 5;
+  int32 Stage = 6;            // the origin's WriteSubmissionStage; 0 (other) from an older sender
+}
+
+// The two signals of a bundle stay separate: BatchCommitted (the proposal reached Raft; the record is durable)
+// and PrepareAcknowledged (every prepare in it took ownership of its key). PrepareRejection names why an
+// acknowledgement was refused: 0 none, 1 a foreign intent holds the key, 2 the validated base moved.
+message GrpcDurableBundleResponse {
+  bool BatchCommitted = 1;
+  bool PrepareAcknowledged = 2;
+  int32 PrepareRejection = 3;
+}
+
+// Replicates a transaction's terminal decision on its anchor partition and answers with the CANONICAL outcome
+// read from the leader's record store after the ordered apply — a competing decision that won in log order is
+// what the sender sees — so the sender needs no second lookup call.
+message GrpcDurableDecisionRequest {
+  int32 PartitionId = 1;
+  bytes DecisionDelta = 2;
+  string FenceKey = 3;        // empty = unfenced
+  int64 FenceGeneration = 4;
+  int32 TransactionIdNode = 5;
+  int64 TransactionIdPhysical = 6;
+  uint32 TransactionIdCounter = 7;
+  int64 Epoch = 8;
+}
+
+// Replicated: the batch carrying the decision committed. Known: the record was read after the apply, and
+// Decision / AbortClass carry it (Kahuna's TransactionDecision and TransactionAbortClass values); when false,
+// the sender must look the record up itself.
+message GrpcDurableDecisionResponse {
+  bool Replicated = 1;
+  bool Known = 2;
+  int32 Decision = 3;
+  int32 AbortClass = 4;
+}
+
+// Forwards a one-phase commit bundle — [record init, prepare, commit decision] of one transaction — to the
+// anchor partition's leader, which submits the three deltas as ONE atomic scheduler submission under ordinary
+// admission and the origin's range fence. The transaction identity and the attempt's operation id let the
+// receiver read the canonical record after the ordered apply and name the gate verdict of a rejected commit.
+message GrpcDurableOnePhaseRequest {
+  int32 PartitionId = 1;
+  bytes RecordInitDelta = 2;
+  bytes AnchorPrepareDelta = 3;
+  bytes DecisionDelta = 4;
+  string FenceKey = 5;        // empty = unfenced
+  int64 FenceGeneration = 6;
+  int32 TransactionIdNode = 7;
+  int64 TransactionIdPhysical = 8;
+  uint32 TransactionIdCounter = 9;
+  int64 Epoch = 10;
+  int32 OpIdNode = 11;
+  int64 OpIdPhysical = 12;
+  uint32 OpIdCounter = 13;
+}
+
+// The bundle signals (BatchCommitted / PrepareAcknowledged / PrepareRejection, as in GrpcDurableBundleResponse)
+// plus the CANONICAL outcome read from the leader's record store after the ordered apply: a durable batch is
+// not a decision — the commit transition is judged at apply, in log order. When the record stays Undecided,
+// GatedVerdict names the bundled-commit gate's rejection (Kahuna's BundledCommitVerdict values; 0 = no gate
+// rejection recorded, so the deadline gate withheld the commit).
+message GrpcDurableOnePhaseResponse {
+  bool BatchCommitted = 1;
+  bool PrepareAcknowledged = 2;
+  int32 PrepareRejection = 3;
+  bool DecisionKnown = 4;
+  int32 Decision = 5;
+  int32 AbortClass = 6;
+  int32 GatedVerdict = 7;
+  double BundleMs = 8;        // leader-measured enqueue-to-acknowledgement wall time of the bundled
+                              // submission; <= 0 when it was never enqueued or the leader predates this field
+}
+
+message GrpcLookupTransactionRecordRequest {
+  int32 PartitionId = 1;
+  int32 TransactionIdNode = 2;
+  int64 TransactionIdPhysical = 3;
+  uint32 TransactionIdCounter = 4;
+  int64 Epoch = 5;
+  string AnchorKey = 6;
+}
+
+message GrpcLookupTransactionRecordResponse {
+  bool Found = 1;
+  bytes Record = 2;      // the serialized canonical record when Found; empty otherwise
+}
+
+enum GrpcClientBatchType {
+  TYPE_NONE = 0;
+  TRY_SET_KEY_VALUE = 1;
+  TRY_SET_MANY_KEY_VALUE = 2;
+  TRY_EXTEND_KEY_VALUE = 3;
+  TRY_DELETE_KEY_VALUE = 4;
+  TRY_GET_KEY_VALUE = 5;
+  TRY_EXISTS_KEY_VALUE = 6;
+  TRY_EXECUTE_TRANSACTION_SCRIPT = 7;  
+  TRY_ACQUIRE_EXCLUSIVE_LOCK = 8;
+  TRY_GET_BY_BUCKET = 9;
+  TRY_SCAN_BY_PREFIX = 10;
+  TRY_START_TRANSACTION = 11;
+  TRY_COMMIT_TRANSACTION = 12;
+  TRY_ROLLBACK_TRANSACTION = 13;
+  TRY_DELETE_MANY_KEY_VALUE = 14;
+}
+
+enum GrpcServerBatchType {
+  SERVER_TYPE_NONE = 0;
+  SERVER_TRY_SET_KEY_VALUE = 1;
+  SERVER_TRY_SET_MANY_KEY_VALUE = 3;
+  SERVER_TRY_EXTEND_KEY_VALUE = 4;
+  SERVER_TRY_DELETE_KEY_VALUE = 5;
+  SERVER_TRY_GET_KEY_VALUE = 6;
+  SERVER_TRY_EXISTS_KEY_VALUE = 7;
+  SERVER_TRY_GET_MANY_VALUES = 8;
+  SERVER_TRY_EXISTS_MANY_VALUES = 9;
+  SERVER_TRY_EXECUTE_TRANSACTION_SCRIPT = 10; 
+  SERVER_TRY_ACQUIRE_EXCLUSIVE_LOCK = 11;
+  SERVER_TRY_ACQUIRE_EXCLUSIVE_PREFIX_LOCK = 12;
+  SERVER_TRY_ACQUIRE_MANY_EXCLUSIVE_LOCKS = 13;
+  SERVER_TRY_RELEASE_EXCLUSIVE_LOCK = 14;
+  SERVER_TRY_RELEASE_EXCLUSIVE_PREFIX_LOCK = 15;
+  SERVER_TRY_RELEASE_MANY_EXCLUSIVE_LOCKS = 16;
+  SERVER_TRY_PREPARE_MUTATIONS = 17;
+  SERVER_TRY_PREPARE_MANY_MUTATIONS = 18;
+  SERVER_TRY_COMMIT_MUTATIONS = 19;
+  SERVER_TRY_COMMIT_MANY_MUTATIONS = 20;
+  SERVER_TRY_ROLLBACK_MUTATIONS = 21;
+  SERVER_TRY_ROLLBACK_MANY_MUTATIONS = 22;
+  SERVER_TRY_GET_BY_BUCKET = 23;
+  SERVER_TRY_SCAN_BY_PREFIX = 24;
+  SERVER_TRY_START_TRANSACTION = 25;
+  SERVER_TRY_COMMIT_TRANSACTION = 26;
+  SERVER_TRY_ROLLBACK_TRANSACTION = 27;
+  SERVER_TRY_GET_BY_RANGE = 28;
+  SERVER_TRY_DELETE_MANY_KEY_VALUE = 29;
+  SERVER_TRY_CHECK_WRITE_INTENT = 30;
+  SERVER_TRY_ACQUIRE_EXCLUSIVE_RANGE_LOCK = 31;
+  SERVER_TRY_RELEASE_EXCLUSIVE_RANGE_LOCK = 32;
+  SERVER_TRY_ENSURE_KEY_RANGE_SEEDED = 33;
+  SERVER_TRY_GET_RANGE_LOCKS = 34;
+  SERVER_TRY_IMPORT_RANGE_LOCKS = 35;
+  SERVER_TRY_ACQUIRE_SNAPSHOT_HOLD = 36;
+  SERVER_TRY_RENEW_SNAPSHOT_HOLD   = 37;
+  SERVER_TRY_RELEASE_SNAPSHOT_HOLD = 38;
+  SERVER_TRY_GET_SNAPSHOT_FLOOR = 39;
+  SERVER_TRY_ENSURE_KEY_RANGE_REMOVED = 40;
+  SERVER_BEGIN_OPERATION = 41;
+  SERVER_COMPLETE_OPERATION = 42;
+  SERVER_GET_TRANSACTION_WORKING_SET = 43;
+  SERVER_CLOSE_TRANSACTION = 44;
+  SERVER_IMPORT_COMPLETION_RECEIPTS = 45;
+  SERVER_IMPORT_COORDINATOR_DECISIONS = 46;
+  SERVER_DURABLE_OPERATION = 47;
+  SERVER_LOOKUP_TRANSACTION_RECORD = 48;
+  SERVER_TRY_CHECK_MANY_WRITE_INTENTS = 49;
+  SERVER_REPLICATE_KEY_VALUE_RANGE_PAGE = 50;
+  SERVER_GET_RANGE_TRANSACTION_STATE = 51;
+  SERVER_GET_STAGED_BASE_VERDICTS = 52;
+  SERVER_DURABLE_BUNDLE = 53;
+  SERVER_DURABLE_DECISION = 54;
+  SERVER_DURABLE_ONE_PHASE = 55;
+  // The envelope carries no payload of its own: the Coalesced field holds the real requests
+  // (or responses).
+  SERVER_COALESCED = 56;
+}
+
+enum GrpcRangeLockMode {
+  GRPC_RANGE_LOCK_EXCLUSIVE = 0;
+  GRPC_RANGE_LOCK_SHARED    = 1;
+}
+
+enum GrpcKeyValueFlags {
+  NONE = 0;
+  SET = 1;
+  SET_NO_REVISION = 2;
+  SET_IF_EXISTS = 4;
+  SET_IF_NOT_EXISTS = 8;
+  SET_IF_EQUAL_TO_VALUE = 16;
+  SET_IF_EQUAL_TO_REVISION = 32;
+}
+
+enum GrpcKeyValueResponseType {
+  TYPE_SET = 0;
+  TYPE_NOTSET = 1;
+  TYPE_EXTENDED = 2;
+  TYPE_GOT = 3;
+  TYPE_DELETED = 4;
+  TYPE_LOCKED = 5;
+  TYPE_UNLOCKED = 6;
+  TYPE_PROPOSED = 7;
+  TYPE_COMMITTED = 8;
+  TYPE_ROLLEDBACK = 9;
+  TYPE_EXISTS = 10;
+  TYPE_ERRORED = 99;
+  TYPE_INVALID_INPUT = 100;
+  TYPE_MUST_RETRY = 101;
+  TYPE_ABORTED = 102;
+  TYPE_DOES_NOT_EXIST = 103;
+  TYPE_ALREADY_LOCKED = 104;
+  TYPE_PREFIX_LOCK_UNSUPPORTED_ON_RANGED_SPACE = 105;
+  // 106 and 107 are internal actor-only results that never reach an external caller. They are declared
+  // here so the numbering matches the C# enum and cannot be reused by a future external value.
+  TYPE_RANGE_LOCKS = 106;
+  TYPE_SAFE_TIMESTAMP = 107;
+  // The node refused to admit the transaction: its admission queue was full, or the caller's admission
+  // wait budget expired. Nothing was started, so a retry is safe — but the node is shedding load, so the
+  // caller should back off first. Deliberately distinct from TYPE_MUST_RETRY, which is transient and
+  // should be retried promptly.
+  TYPE_ADMISSION_REFUSED = 108;
+}
+
+enum GrpcKeyValueDurability {
+  EPHEMERAL = 0;
+  PERSISTENT = 1;
+}
+
+enum GrpcKeyValueState {
+  STATE_UNDEFINED = 0;
+  STATE_SET= 1;
+  STATE_DELETED = 2;
+}
+
+enum GrpcLockingType {
+  LOCKING_TYPE_PESSIMISTIC = 0;
+  LOCKING_TYPE_OPTIMISTIC = 1;
+}
+enum GrpcReadValidation {
+  READ_VALIDATION_NONE = 0;
+  READ_VALIDATION_TRACK_AND_VALIDATE = 1;
+}
+enum GrpcDecisionDurability {
+  DECISION_DURABILITY_BEST_EFFORT = 0;
+  DECISION_DURABILITY_DURABLE = 1;
+}
+// Offset by one from Kahuna.Shared.KeyValue.TransactionPriority so that zero — the value a peer that
+// predates this field necessarily sends — means "not specified" and resolves to Normal, rather than
+// silently demoting every old client's transactions to Background. Convert with TransactionPriorityWire,
+// never with a raw cast.
+enum GrpcTransactionPriority {
+  TRANSACTION_PRIORITY_UNSPECIFIED = 0;
+  TRANSACTION_PRIORITY_BACKGROUND = 1;
+  TRANSACTION_PRIORITY_LOW = 2;
+  TRANSACTION_PRIORITY_NORMAL = 3;
+  TRANSACTION_PRIORITY_HIGH = 4;
+  TRANSACTION_PRIORITY_CRITICAL = 5;
+}
+message GrpcAcquireSnapshotHoldRequest {
+  string HolderId          = 1;
+  int32  TimestampNode     = 2;
+  int64  TimestampPhysical = 3;
+  uint32 TimestampCounter  = 4;
+  int32  LeaseMs           = 5;
+}
+
+message GrpcAcquireSnapshotHoldResponse {
+  GrpcKeyValueResponseType Type             = 1;
+  string                   HoldId           = 2;
+  int32                    LeaseExpiryNode     = 3;
+  int64                    LeaseExpiryPhysical = 4;
+  uint32                   LeaseExpiryCounter  = 5;
+}
+
+message GrpcRenewSnapshotHoldRequest {
+  string HoldId  = 1;
+  int32  LeaseMs = 2;
+}
+
+message GrpcRenewSnapshotHoldResponse {
+  GrpcKeyValueResponseType Type               = 1;
+  int32                    LeaseExpiryNode     = 2;
+  int64                    LeaseExpiryPhysical = 3;
+  uint32                   LeaseExpiryCounter  = 4;
+}
+
+message GrpcReleaseSnapshotHoldRequest {
+  string HoldId = 1;
+}
+
+message GrpcReleaseSnapshotHoldResponse {
+  GrpcKeyValueResponseType Type = 1;
+}
+
+message GrpcGetSnapshotFloorRequest {
+}
+
+message GrpcGetSnapshotFloorResponse {
+  int32  EffectiveFloorNode     = 1;
+  int64  EffectiveFloorPhysical = 2;
+  uint32 EffectiveFloorCounter  = 3;
+  int32  LiveHolds              = 4;
+  // TYPE_GOT on an authoritative answer; TYPE_MUST_RETRY when the answering node could not
+  // confirm meta-partition leadership and refused to report from possibly-stale local state.
+  // Absent (TYPE_SET, the enum default) from servers predating this field — treated as success.
+  GrpcKeyValueResponseType Type = 5;
+}

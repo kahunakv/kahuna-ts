@@ -1,0 +1,60 @@
+{
+  "name": "kahuna-client",
+  "version": "0.2.0",
+  "description": "TypeScript client for Kahuna: distributed locks, key/value store and sequencer",
+  "license": "MIT",
+  "author": "Andres Gutierrez",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kahunakv/kahuna-ts.git"
+  },
+  "homepage": "https://github.com/kahunakv/kahuna-ts",
+  "keywords": [
+    "distributed-lock",
+    "locks",
+    "key-value",
+    "raft",
+    "consensus",
+    "leader-election",
+    "sequencer",
+    "kahuna"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "protos",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cluster:up": "docker compose -f ../kahuna/docker/local.yml up -d",
+    "cluster:down": "docker compose -f ../kahuna/docker/local.yml down"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
+    "@noble/hashes": "^2.4.0",
+    "undici": "^8.10.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

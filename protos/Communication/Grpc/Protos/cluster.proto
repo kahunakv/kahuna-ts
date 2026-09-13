@@ -1,0 +1,202 @@
+syntax = "proto3";
+
+import "Communication/Grpc/Protos/routing.proto";
+
+service Cluster {
+  rpc GetMembership (GrpcGetMembershipRequest) returns (GrpcGetMembershipResponse);
+  rpc Leave (GrpcClusterLeaveRequest) returns (GrpcClusterLeaveResponse);
+  rpc GetPlacement (GrpcGetPlacementRequest) returns (GrpcGetPlacementResponse);
+  rpc SetReplicationFactor (GrpcSetReplicationFactorRequest) returns (GrpcSetReplicationFactorResponse);
+  rpc GetRanges (GrpcGetRangesRequest) returns (GrpcGetRangesResponse);
+  rpc SplitRange (GrpcSplitRangeRequest) returns (GrpcSplitRangeResponse);
+  rpc MergeRanges (GrpcMergeRangesRequest) returns (GrpcMergeRangesResponse);
+  rpc GetRoutingMetadata (GrpcGetRoutingMetadataRequest) returns (GrpcGetRoutingMetadataResponse);
+}
+
+message GrpcGetMembershipRequest {
+}
+
+message GrpcClusterLeaveRequest {
+}
+
+message GrpcClusterLeaveResponse {
+  // Whether the node is out of the committed roster.
+  bool Left = 1;
+  GrpcLeaveClusterOutcome Outcome = 2;
+  // Roster version resulting from the request; for a committed removal, the version that no
+  // longer lists this node. 0 when no roster version is known locally.
+  int64 MembershipVersion = 3;
+  // Whether repeating the request could produce a different answer. False for a permanent
+  // refusal and for outcomes that already succeeded.
+  bool Retryable = 4;
+  string Reason = 5;
+  // Whether the committed partition map stopped naming this node before its removal, i.e. its
+  // replicas were evacuated onto survivors first. False when it left without a drain (no range
+  // named it) or did not leave at all.
+  bool Drained = 6;
+}
+
+enum GrpcLeaveClusterOutcome {
+  LEAVE_CLUSTER_OUTCOME_COMMITTED = 0;
+  LEAVE_CLUSTER_OUTCOME_NOT_A_MEMBER = 1;
+  // Removal would leave the cluster without a voter: permanent, never retry.
+  LEAVE_CLUSTER_OUTCOME_REFUSED_INSUFFICIENT_VOTERS = 2;
+  LEAVE_CLUSTER_OUTCOME_NOT_INITIALIZED = 3;
+  LEAVE_CLUSTER_OUTCOME_NO_LEADER = 4;
+  // Not confirmed before the deadline; the removal may still commit, so re-read the roster.
+  LEAVE_CLUSTER_OUTCOME_TIMEOUT = 5;
+  // Another node is already draining; only one decommission runs at a time. Nothing committed,
+  // and the condition clears on its own — retry once that drain finishes.
+  LEAVE_CLUSTER_OUTCOME_REFUSED_DRAIN_IN_PROGRESS = 6;
+  // Evacuation did not finish before the drain deadline; the node stays in the roster and keeps
+  // serving. Replicas already moved stay moved, so retrying resumes the drain.
+  LEAVE_CLUSTER_OUTCOME_DRAIN_TIMED_OUT = 7;
+}
+
+message GrpcClusterMember {
+  string Endpoint = 1;
+  int32 NodeId = 2;
+  GrpcClusterMemberRole Role = 3;
+  int64 JoinedVersion = 4;
+}
+
+message GrpcGetMembershipResponse {
+  int64 MembershipVersion = 1;
+  repeated GrpcClusterMember Members = 2;
+  GrpcClusterMemberRole LocalRole = 3;
+  // Whether the node has completed cluster initialization. Until true the node refuses
+  // every key/value request, even though it already answers membership queries.
+  bool Initialized = 4;
+}
+
+enum GrpcClusterMemberRole {
+  CLUSTER_MEMBER_ROLE_LEARNER = 0;
+  CLUSTER_MEMBER_ROLE_VOTER = 1;
+  CLUSTER_MEMBER_ROLE_LEAVING = 2;
+  CLUSTER_MEMBER_ROLE_NOT_MEMBER = 3;
+}
+
+message GrpcGetPlacementRequest {
+}
+
+message GrpcGetPlacementResponse {
+  // Globally configured replication factor on the answering node. 0 = full replication.
+  int32 ReplicationFactor = 1;
+  bool RebalancerEnabled = 2;
+  bool Initialized = 3;
+  string LocalEndpoint = 4;
+  int32 HostedPartitionCount = 5;
+  repeated GrpcPartitionPlacement Partitions = 6;
+}
+
+message GrpcPartitionPlacement {
+  int32 PartitionId = 1;
+  // Lifecycle state name (Active, Draining, Removed, ...).
+  string State = 2;
+  int64 Generation = 3;
+  // Per-range override when set, else the global factor. 0 = full replication.
+  int32 EffectiveReplicationFactor = 4;
+  // Whether the answering node hosts (materializes) this partition locally.
+  bool HostedLocally = 5;
+  // Empty = legacy full replication (every roster voter hosts the range).
+  repeated GrpcPartitionReplica Replicas = 6;
+}
+
+message GrpcPartitionReplica {
+  string Endpoint = 1;
+  GrpcPartitionReplicaRole Role = 2;
+}
+
+enum GrpcPartitionReplicaRole {
+  PARTITION_REPLICA_ROLE_VOTER = 0;
+  PARTITION_REPLICA_ROLE_LEARNER = 1;
+  PARTITION_REPLICA_ROLE_REMOVING = 2;
+}
+
+message GrpcSetReplicationFactorRequest {
+  int32 PartitionId = 1;
+  // 0 clears the per-partition override (inherit the global factor).
+  int32 ReplicationFactor = 2;
+}
+
+message GrpcSetReplicationFactorResponse {
+  // True when the override was committed. The change adjusts the placement target only;
+  // the rebalancer moves replicas toward it on later passes.
+  bool Success = 1;
+  // Commit outcome name (Success, or the refusing status).
+  string Status = 2;
+  // Committed range generation after the change; 0 when refused.
+  int64 Generation = 3;
+  // Why the override was refused; empty on success. A follower refuses: retry against the
+  // meta-partition leader.
+  string Reason = 4;
+}
+
+message GrpcGetRangesRequest {
+  // Optional filter. Empty means every key space the answering node knows about.
+  string KeySpace = 1;
+}
+
+message GrpcGetRangesResponse {
+  // Whether cluster initialization has completed. Until true an empty list means "not known
+  // yet" rather than "no ranges exist".
+  bool Initialized = 1;
+  // The answering node's endpoint, so a node-local routing mode can be attributed.
+  string LocalEndpoint = 2;
+  repeated GrpcKeySpaceRanges KeySpaces = 3;
+}
+
+message GrpcKeySpaceRanges {
+  string KeySpace = 1;
+  // How the ANSWERING node routes this space: KeyRange or Hash. Node-local and unreplicated,
+  // unlike the descriptors, so two nodes may legitimately disagree.
+  string RoutingMode = 2;
+  // Ordered by StartKey, ordinally, the way the router itself searches them.
+  repeated GrpcRangeDescriptor Descriptors = 3;
+}
+
+message GrpcRangeDescriptor {
+  // Absent StartKey means -infinity within the key space; absent EndKey means +infinity.
+  // Field presence carries that distinction: an empty string is a real bound, not an open end.
+  optional string StartKey = 1;
+  optional string EndKey = 2;
+  int32 PartitionId = 3;
+  int64 Generation = 4;
+}
+
+message GrpcSplitRangeRequest {
+  string KeySpace = 1;
+  // The covering range [S, E) becomes [S, SplitKey) and [SplitKey, E) — the key lands in the
+  // upper half. Compared ordinally.
+  string SplitKey = 2;
+}
+
+message GrpcSplitRangeResponse {
+  bool Success = 1;
+  // Outcome name: Succeeded, NotLeader, NoRange, InvalidSplitKey, BelowMinRangeSize,
+  // PartitionCreationFailed, TransferFailed, QuiesceFailed, CutoverFailed, ConcurrentSplit,
+  // Indeterminate, InvalidInput or KeyRangeDisabled.
+  string Status = 2;
+  // False when the map may still change despite this answer. A caller that treats an
+  // indeterminate outcome as "the split did not happen" will report phantom violations.
+  bool Determinate = 3;
+  int32 NewPartitionId = 4;
+  int64 NewGeneration = 5;
+  // Best-effort retry target when this node refused for lack of leadership; empty if unknown.
+  string LeaderHint = 6;
+  string Reason = 7;
+}
+
+message GrpcMergeRangesRequest {
+}
+
+message GrpcMergeRangesResponse {
+  bool Success = 1;
+  // Completed, NotLeader or Indeterminate.
+  string Status = 2;
+  bool Determinate = 3;
+  // Adjacent pairs folded by this pass; meaningful only when the pass actually ran.
+  int32 Merges = 4;
+  string LeaderHint = 5;
+  string Reason = 6;
+}

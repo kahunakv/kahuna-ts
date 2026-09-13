@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+service Backups {
+  rpc TakeFullBackup        (GrpcTakeFullBackupRequest)        returns (GrpcBackupInfoResponse);
+  rpc TakeIncrementalBackup (GrpcTakeIncrementalBackupRequest) returns (GrpcBackupInfoResponse);
+  rpc TakeCoordinatedBackup (GrpcTakeCoordinatedBackupRequest) returns (GrpcBackupInfoResponse);
+  rpc ListBackups           (GrpcListBackupsRequest)           returns (GrpcListBackupsResponse);
+  rpc GetBackupChain        (GrpcGetBackupChainRequest)        returns (GrpcListBackupsResponse);
+  rpc ValidateChain         (GrpcValidateChainRequest)         returns (GrpcListBackupsResponse);
+  rpc Restore               (GrpcRestoreRequest)               returns (GrpcRestoreResponse);
+  rpc RunBackupGarbageCollection (GrpcBackupGcRequest)         returns (GrpcBackupGcResponse);
+}
+
+message GrpcTakeFullBackupRequest {
+}
+
+message GrpcTakeIncrementalBackupRequest {
+  string ParentBackupId = 1;
+}
+
+message GrpcTakeCoordinatedBackupRequest {
+}
+
+message GrpcListBackupsRequest {
+}
+
+message GrpcGetBackupChainRequest {
+  string LeafBackupId = 1;
+}
+
+message GrpcValidateChainRequest {
+  string LeafBackupId = 1;
+}
+
+message GrpcBackupInfoResponse {
+  string BackupId           = 1;
+  string Type               = 2;
+  string CreatedAtUtc       = 3;
+  string ParentBackupId     = 4;
+  int32  PartitionCount     = 5;
+  bool   HasSnapshotTime    = 6;
+  int32  SnapshotNode       = 7;
+  int64  SnapshotPhysical   = 8;
+  uint32 SnapshotCounter    = 9;
+  // Requested vs actual kind and substitution reason (empty string = null).
+  string RequestedKind      = 10;
+  string ActualKind         = 11;
+  string SubstitutionReason = 12;
+  // Legacy/invalid listing.
+  int32  FormatVersion      = 13;
+  bool   IsInvalid          = 14;
+  string InvalidReason      = 15;
+  // Chain coverage bounds (only set on a resolved chain's head entry).
+  bool   HasCoverage        = 16;
+  int64  MinRecoverablePhysicalMs = 17;
+  int64  MaxRecoverablePhysicalMs = 18;
+  // Cluster/coordinator identity (empty string = null). Lets a listing from any node reveal which
+  // cluster and which node produced each backup, so a per-node (partial) catalog is visible.
+  string ClusterId          = 19;
+  string CoordinatorNode    = 20;
+  // Artifacts exist for this id but no manifest does: the backup never completed (or is still in
+  // flight). Such entries also set IsInvalid, so older callers still refuse to use them.
+  bool   IsIncomplete       = 21;
+}
+
+message GrpcListBackupsResponse {
+  repeated GrpcBackupInfoResponse Backups = 1;
+}
+
+message GrpcRestoreRequest {
+  string LeafBackupId  = 1;
+  string TargetDir     = 2;
+  int64  TargetTimeMs  = 3;
+}
+
+message GrpcRestoreResponse {
+  string TargetDir             = 1;
+  int32  PartitionsRestored    = 2;
+  int64  EntriesApplied        = 3;
+  int64  LastAppliedPhysicalMs = 4;
+  repeated GrpcBackupInfoResponse Chain = 5;
+  string Outcome               = 6; // KahunaBackupOutcome name
+  int64  MinRecoverablePhysicalMs = 7;
+  int64  MaxRecoverablePhysicalMs = 8;
+}
+
+message GrpcBackupGcRequest {
+  bool DryRun = 1;
+}
+
+message GrpcBackupGcResponse {
+  bool  Applied       = 1;
+  int64 BytesReclaimed = 2;
+  repeated GrpcBackupGcDeletion RetentionDeletions = 3;
+  repeated GrpcBackupGcOrphan   OrphanReclamations = 4;
+}
+
+message GrpcBackupGcDeletion {
+  string BackupId     = 1;
+  string Type         = 2;
+  string CreatedAtUtc = 3;
+  int64  Bytes        = 4;
+  string Reason       = 5;
+}
+
+message GrpcBackupGcOrphan {
+  string Name        = 1;
+  bool   IsDirectory = 2;
+  string Reason      = 3;
+}
