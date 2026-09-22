@@ -241,6 +241,28 @@ await client.withTransaction({ locking: 'optimistic' }, async (session) => {
 });
 ```
 
+### Conflict policy
+
+By default a session's write intents are `'normal'`: a live intent denies every other
+writer until the session releases, prepares or expires it. Set `conflictPolicy:
+'yield'` for maintenance work (bulk rewrites, backfills, sweeps) that must never make
+foreground work fail:
+
+```ts
+await using session = await client.beginTransaction({
+  locking: 'pessimistic',
+  conflictPolicy: 'yield',
+});
+```
+
+When a normal transaction or a plain write meets a yielding intent, it takes the key
+over instead of failing. The yielding session aborts at its next touch of that key or
+at commit, and it never commits a write to a key it lost. Two yielding sessions
+conflict with each other exactly as two normal ones do.
+
+A yielding session may not hold prefix or range locks; the server refuses those
+acquires. The option applies to sessions only: a script transaction cannot use it.
+
 ## Sequences
 
 ```ts
@@ -337,21 +359,6 @@ Revisions, fencing tokens and sequence values cross the wire as 64-bit integers 
 arrive as JavaScript numbers. Values above `Number.MAX_SAFE_INTEGER`
 (9,007,199,254,740,991) lose precision. No Kahuna counter reaches that range in
 practice, but a sequence whose `maxValue` you set above it would.
-
-## Differences from the .NET client
-
-- Names follow TypeScript convention: `acquireLock` rather than `GetOrCreateLock`,
-  `KeyValueEntry` rather than `KahunaKeyValue`, `Transport` rather than
-  `IKahunaCommunication`.
-- Enumerations are string-literal unions (`'persistent'`, `'mustRetry'`) rather
-  than numeric enums. The wire values are unchanged.
-- Flags become an option: `set(key, value, { mode: 'ifNotExists' })` rather than a
-  `KeyValueFlags` bit set.
-- The gRPC transport sends unary calls. The .NET client multiplexes them over a
-  batching bidirectional stream. Both reach the same server methods with the same
-  semantics; the batcher is an efficiency optimisation this port does not carry.
-- Cluster, key-range, snapshot-hold and backup operations are methods on the
-  client, exactly as in the .NET client.
 
 ## Development
 

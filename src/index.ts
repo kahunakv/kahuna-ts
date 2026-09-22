@@ -68,6 +68,7 @@ export type {
   RoutingMode,
   SequenceResponseCode,
   SetMode,
+  TransactionConflictPolicy,
   TransactionLocking,
   TransactionPriority,
 } from './enums.js';

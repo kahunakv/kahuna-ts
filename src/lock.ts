@@ -93,19 +93,26 @@ export class KahunaLock implements AsyncDisposable {
     );
   }
 
-  /** Releases the lock. Calling it twice is safe and the second call does nothing. */
-  async release(): Promise<boolean> {
-    if (this.released) return false;
-    this.released = true;
+  /**
+   * Releases the lock and reports whether the server released it. Returns false
+   * when the lock was never acquired, was already released through this handle, or
+   * the server no longer holds it for this owner (for example, because it expired).
+   */
+  async release(options?: { signal?: AbortSignal }): Promise<boolean> {
+    if (this.released || !this.acquired || this.ownerToken === null) return false;
 
-    if (!this.acquired || this.ownerToken === null) return false;
-
-    return this.owner.releaseLockAt(
+    const unlocked = await this.owner.releaseLockAt(
       this.owner.lockUrlFor(this.resource, this.servedFrom),
       this.resource,
       this.ownerToken,
       this.durability,
+      options?.signal,
     );
+
+    // Mark as released only once the server answered, so a transport failure leaves the caller free to retry.
+    this.released = true;
+
+    return unlocked;
   }
 
   async [Symbol.asyncDispose](): Promise<void> {

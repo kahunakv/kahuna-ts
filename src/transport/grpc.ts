@@ -8,6 +8,7 @@ import {
   SET_IF_EQUAL_TO_REVISION_FLAG,
   SET_IF_EQUAL_TO_VALUE_FLAG,
   TRANSACTION_LOCKING_CODES,
+  TRANSACTION_CONFLICT_POLICY_CODES,
   TRANSACTION_PRIORITY_CODES,
   durabilityFromCode,
   keyValueResponseFromCode,
@@ -1038,6 +1039,7 @@ export class GrpcTransport implements Transport {
         ...hlcFields('ReadTimestamp', options.readTimestamp),
         Priority: TRANSACTION_PRIORITY_CODES[options.priority ?? 'normal'] + 1,
         AdmissionWaitMs: options.admissionWaitMs ?? 0,
+        ConflictPolicy: TRANSACTION_CONFLICT_POLICY_CODES[options.conflictPolicy ?? 'normal'] + 1,
       },
       call?.signal,
     );

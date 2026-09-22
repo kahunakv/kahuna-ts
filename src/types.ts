@@ -130,6 +130,13 @@ export interface TransactionOptions {
   /** Transaction-wide snapshot for reads. Zero reads the latest committed value. */
   readTimestamp?: HlcTimestamp;
   priority?: TransactionPriority;
+  /**
+   * Whether this transaction yields its point-key write intents to foreground
+   * writers. Defaults to `'normal'`. Use `'yield'` for maintenance work that must
+   * never make a foreground transaction fail. A yielding transaction may not hold
+   * prefix or range locks, and the option applies to interactive sessions only.
+   */
+  conflictPolicy?: import('./enums.js').TransactionConflictPolicy;
 }
 
 /** Identity of one operation inside a transaction, for idempotent replay. */

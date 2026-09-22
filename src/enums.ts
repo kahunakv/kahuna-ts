@@ -83,6 +83,17 @@ export type DecisionDurability = 'bestEffort' | 'durable';
 /** Relative admission order when the server is at its session ceiling. */
 export type TransactionPriority = 'background' | 'low' | 'normal' | 'high' | 'critical';
 
+/**
+ * How an interactive transaction behaves when another writer meets one of its live
+ * write intents. `normal` is the default: a live intent denies every other writer
+ * until it is released, prepared or expired. `yield` marks maintenance work (bulk
+ * rewrites, backfills, sweeps) that must never make foreground work fail: a normal
+ * transaction or a plain write that meets a yielding intent takes the key over, and
+ * the yielding transaction aborts at its next touch of the key or at commit. A
+ * yielding transaction may not hold prefix or range locks.
+ */
+export type TransactionConflictPolicy = 'normal' | 'yield';
+
 /** Compatibility class of a range lock. */
 export type RangeLockMode = 'exclusive' | 'shared' | 'writeFence';
 
@@ -197,6 +208,15 @@ export const TRANSACTION_PRIORITY_CODES: Readonly<Record<TransactionPriority, nu
   normal: 2,
   high: 3,
   critical: 4,
+};
+
+/**
+ * REST codes of {@link TransactionConflictPolicy}. The gRPC enum is offset by one so
+ * that zero means "unspecified"; add one when encoding for gRPC.
+ */
+export const TRANSACTION_CONFLICT_POLICY_CODES: Readonly<Record<TransactionConflictPolicy, number>> = {
+  normal: 0,
+  yield: 1,
 };
 
 export const RANGE_LOCK_MODE_CODES: Readonly<Record<RangeLockMode, number>> = {
