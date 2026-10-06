@@ -293,6 +293,121 @@ the same time, the sequence refuses allocations with `mustRetry`. Each update
 increments `incarnation`. Values from two incarnations can overlap if you set the
 current value lower.
 
+## Rate limiting
+
+A rate limiter inside one process counts the requests of that process only. When
+an application runs as several replicas, each replica keeps its own count. A limit
+of 100 requests per minute then admits 100 requests per minute **per replica**.
+
+The Kahuna rate limiters keep the count in Kahuna. Every replica that names the
+same key spends one budget. They use the same scripts and the same keys as the
+.NET client, so .NET and TypeScript replicas of one application share one budget.
+
+| Limiter | Budget | Typical use |
+| --- | --- | --- |
+| `KahunaFixedWindowRateLimiter` | `permitLimit` permits per window. The budget resets on each window boundary. | simple endpoints |
+| `KahunaSlidingWindowRateLimiter` | `permitLimit` permits in any window. A segment's permits come back when the segment leaves the window. | limits with no burst at the boundary |
+| `KahunaTokenBucketRateLimiter` | bursts up to `tokenLimit`, refilled by `tokensPerPeriod` every `replenishmentPeriodMs` | login attempts, checkout |
+| `KahunaConcurrencyLimiter` | `permitLimit` requests in progress at once. A permit comes back when its lease is released. | expensive operations |
+
+```ts
+import { KahunaTokenBucketRateLimiter } from 'kahuna-client';
+
+const logins = new KahunaTokenBucketRateLimiter(client, {
+  key: 'rate-limit/login_attempts',
+  tokenLimit: 5,
+  replenishmentPeriodMs: 5 * 60_000,
+  tokensPerPeriod: 1,
+});
+
+const lease = await logins.acquire();
+if (!lease.acquired) {
+  console.log(`retry in ${lease.retryAfterMs} ms`);
+}
+```
+
+Each decision is one script transaction. The script reads the state, decides, and
+writes the state back, so two replicas that race for the last permit cannot both
+get it. Time comes from the cluster clock, so every replica agrees on where a
+window starts and on how many tokens a bucket holds.
+
+A concurrency lease holds its permits until you release it. `using` releases it
+at the end of the block:
+
+```ts
+using lease = await reports.acquire();
+if (lease.acquired) await generateReport();
+```
+
+The common options are:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `key` | — | The Kahuna key of the budget. Required. |
+| `durability` | `'ephemeral'` | `'persistent'` replicates and persists every admission. |
+| `queueLimit` | `0` | How many permits may wait in this process. Zero refuses at once. |
+| `queueProcessingOrder` | `'oldestFirst'` | `'newestFirst'` also evicts the oldest waiter when the queue is full. |
+| `failureMode` | `'throw'` | `'allow'` or `'deny'` answers without the cluster when it is unreachable. |
+| `maxRetries` | `8` | Retries of a decision that aborted on a contended counter. |
+
+`KahunaPartitionedRateLimiter` keeps one limiter per partition key, such as a user
+or a client address. `rateLimitKeyFor(policy, partition)` names the key
+`rate-limit/<policy>/<partition>`.
+
+### HTTP middleware
+
+`kahuna-client/middleware` is the counterpart of the .NET
+`Kahuna.Client.AspNetCore` package. It depends on no web framework.
+
+```ts
+import express from 'express';
+import { kahunaRateLimit } from 'kahuna-client/middleware';
+
+const app = express();
+
+// 100 requests per minute, across every replica.
+app.use('/api', kahunaRateLimit({
+  client,
+  policy: 'simple_endpoints',
+  fixedWindow: { permitLimit: 100, windowMs: 60_000 },
+}));
+
+// 5 login attempts per email, then 1 more every 5 minutes.
+app.post('/login', kahunaRateLimit<express.Request>({
+  client,
+  policy: 'login_attempts',
+  partitionBy: (req) => String(req.query.email ?? 'unknown'),
+  tokenBucket: { tokenLimit: 5, replenishmentPeriodMs: 5 * 60_000, tokensPerPeriod: 1 },
+}), login);
+```
+
+- A refused request gets status 429, and a `Retry-After` header when the cluster
+  can tell when the budget frees up. `rejectionStatusCode` and `onRejected`
+  change the answer.
+- A concurrency permit comes back when the response closes.
+- The policy names the key `rate-limit/<policy>`, or
+  `rate-limit/<policy>/<partition>` with `partitionBy`. These are the keys the
+  .NET extension methods name. Set `keyPrefix`, or give a settings function, to
+  name other keys.
+- Wrong settings throw when the middleware is built, not on the first request.
+- Close the policy when the application stops: `await middleware.policy.close()`.
+
+`kahunaRateLimit` works with Express, Connect and `node:http`. For a handler that
+takes a `Request` and returns a `Response` (Hono, Bun, Deno, route handlers), use
+`withKahunaRateLimit`:
+
+```ts
+import { withKahunaRateLimit } from 'kahuna-client/middleware';
+
+export const POST = withKahunaRateLimit(
+  { client, policy: 'reports', concurrency: { permitLimit: 10 } },
+  async (request) => Response.json(await generateReport(request)),
+);
+```
+
+For any other framework, build a `KahunaRateLimitPolicy` and call
+`policy.acquire(request)` from its request hook.
+
 ## Cluster and operations
 
 ```ts

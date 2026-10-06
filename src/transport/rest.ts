@@ -755,6 +755,7 @@ export class RestTransport implements Transport {
       lastModified: hlcFromJson(row['lastModified'] as HlcJson | null),
       durability: durabilityFromCode(row['durability'] as number),
       routeIndex: numberOf(row['routeIndex']),
+      holderTransactionId: hlcFromJson(row['holderTransactionId'] as HlcJson | null),
     }));
 
     this.learnBatchRoutes(parsed, response['routes'], url);

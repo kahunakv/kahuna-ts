@@ -81,10 +81,17 @@ export interface BatchWriteResult {
   readonly lastModified: HlcTimestamp;
   readonly durability: Durability;
   readonly routeIndex: number;
+  /**
+   * The transaction whose write intent or lock a `mustRetry` item ran into.
+   * Advisory: a caller can use it to abort a younger transaction at once instead
+   * of retrying until its deadline. `HLC_ZERO` when the answer names no
+   * holder, and always for a batched delete.
+   */
+  readonly holderTransactionId: HlcTimestamp;
 }
 
 /** The server's answer for one key of a batched read. */
-export interface BatchReadResult extends BatchWriteResult {
+export interface BatchReadResult extends Omit<BatchWriteResult, 'holderTransactionId'> {
   readonly value: Uint8Array | null;
 }
 

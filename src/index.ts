@@ -118,6 +118,31 @@ export type {
   ValueInput,
 } from './types.js';
 
+export {
+  DEFAULT_RATE_LIMIT_KEY_PREFIX,
+  KahunaConcurrencyLimiter,
+  KahunaFixedWindowRateLimiter,
+  KahunaPartitionedRateLimiter,
+  KahunaRateLimiter,
+  KahunaSlidingWindowRateLimiter,
+  KahunaTokenBucketRateLimiter,
+  MAX_SEGMENTS_PER_WINDOW,
+  RateLimitLease,
+  rateLimitKeyFor,
+} from './rate-limiting/index.js';
+export type {
+  AcquireOptions,
+  ConcurrencyLimiterOptions,
+  FixedWindowRateLimiterOptions,
+  PartitionedRateLimiterOptions,
+  QueueProcessingOrder,
+  RateLimiterFailureMode,
+  RateLimiterOptions,
+  RateLimiterStatistics,
+  SlidingWindowRateLimiterOptions,
+  TokenBucketRateLimiterOptions,
+} from './rate-limiting/index.js';
+
 export { GrpcTransport } from './transport/grpc.js';
 export { RestTransport } from './transport/rest.js';
 export type { CallOptions, Transport } from './transport/transport.js';

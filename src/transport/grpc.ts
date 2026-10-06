@@ -1883,6 +1883,7 @@ function readBatchWriteItems(value: unknown): BatchWriteResult[] {
     lastModified: readHlc(row, 'LastModified'),
     durability: durabilityFromCode(row['Durability'] as number),
     routeIndex: numberOf(row['RouteIndex']),
+    holderTransactionId: readHlc(row, 'HolderTransactionId'),
   }));
 }
 
