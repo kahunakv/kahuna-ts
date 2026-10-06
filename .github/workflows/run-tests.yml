@@ -1,0 +1,54 @@
+name: Run Tests
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      kahuna-ref:
+        description: Branch, tag or commit of kahunakv/kahuna to run the suite against
+        required: false
+        default: main
+jobs:
+  Kahuna-TS-Tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      KAHUNA_SERVER_DEFAULT_LOG_LEVEL: Warning
+      KAHUNA_SERVER_LOG_LEVEL: Warning
+      # The three-node cluster docker/local.yml starts. This is also the suite's default.
+      KAHUNA_TEST_ENDPOINTS: https://localhost:8082,https://localhost:8084,https://localhost:8086
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v5
+      - name: Check out Kahuna server
+        uses: actions/checkout@v5
+        with:
+          repository: kahunakv/kahuna
+          ref: ${{ inputs.kahuna-ref || 'main' }}
+          path: kahuna
+      - name: Install Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Run Kahuna Server
+        # Builds the server images from source, starts the three-node cluster, and waits until
+        # every node answers a decided lock request (partition leaders elected).
+        run: (cd kahuna/scripts && chmod +x ./run-server.sh && ./run-server.sh)
+      - name: Run Client Tests
+        run: npm test
+      - name: Dump Kahuna Server logs
+        if: failure()
+        run: docker compose -f kahuna/docker/local.yml logs --timestamps
+      - name: Stop Kahuna Server
+        if: always()
+        run: docker compose -f kahuna/docker/local.yml down -v
