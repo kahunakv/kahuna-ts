@@ -1,4 +1,9 @@
-import type { Durability, RangeLockMode, TransactionPriority } from '../enums.js';
+import type {
+  Durability,
+  KeyValueResponseCode,
+  RangeLockMode,
+  TransactionPriority,
+} from '../enums.js';
 import type { HlcTimestamp } from '../hlc.js';
 import type {
   BackupGcResult,
@@ -12,6 +17,8 @@ import type {
   DeleteManyItem,
   ExtendOutcome,
   GetManyItem,
+  HistoryHoldAnswer,
+  HistoryHoldRequest,
   LockAcquisition,
   LockInfo,
   MergeRangesResult,
@@ -39,6 +46,9 @@ import type {
   TransactionContext,
   TransactionOptions,
   TransactionStart,
+  WatchFrame,
+  WatchRequest,
+  WatchRoute,
   WriteOutcome,
 } from '../types.js';
 
@@ -72,6 +82,36 @@ export interface RouteSink {
     requestUrl: string,
   ): void;
   reportEndpointFailure(url: string): void;
+}
+
+/**
+ * One watch open on one node, as a transport delivers it.
+ *
+ * `frames` yields the frames after the opening, in the order the node sent them,
+ * and stops after a terminal frame. When the connection ends without a terminal
+ * frame, it yields one `lagged` frame with the reason `disconnected`, because events
+ * can be missing from that point. After `close` it ends without a frame.
+ */
+export interface WatchStream {
+  /** Reads the watch's frames. Only one reader may read a stream. */
+  frames(signal?: AbortSignal): AsyncIterable<WatchFrame>;
+
+  /** Closes the watch on the node. Idempotent. */
+  close(): Promise<void>;
+}
+
+/**
+ * A node's answer to a watch request.
+ *
+ * `type` is `get` with an open `stream` registered on `partitions`, or a refusal with
+ * no stream. A `doesNotExist` refusal carries `routes`: the replicas of each
+ * partition the request covers.
+ */
+export interface WatchOpening {
+  readonly type: KeyValueResponseCode;
+  readonly stream: WatchStream | null;
+  readonly partitions: number[];
+  readonly routes: WatchRoute[];
 }
 
 /**
@@ -251,6 +291,15 @@ export interface Transport {
     durability: Durability,
     options?: ReadCallOptions,
   ): AsyncIterable<ScanItem>;
+
+  /**
+   * Opens one watch on the node and waits for the node's answer.
+   *
+   * On `get` the watch is registered on the node before this returns. The signal
+   * bounds only the opening. The returned stream lives until it is closed. A
+   * transport failure before the answer comes back as a `mustRetry` refusal.
+   */
+  openWatch(url: string, request: WatchRequest, options?: CallOptions): Promise<WatchOpening>;
 
   // ── Transaction locks ──────────────────────────────────────────────────────
 
@@ -432,9 +481,18 @@ export interface Transport {
     url: string,
     holdId: string,
     options?: CallOptions,
-  ): Promise<import('../enums.js').KeyValueResponseCode>;
+  ): Promise<KeyValueResponseCode>;
 
   getSnapshotFloor(url: string, options?: CallOptions): Promise<SnapshotFloor>;
+
+  // ── History holds ──────────────────────────────────────────────────────────
+
+  /** Sends a request to the history hold registry. The node routes it to the meta-partition leader. */
+  historyHold(
+    url: string,
+    request: HistoryHoldRequest,
+    options?: CallOptions,
+  ): Promise<HistoryHoldAnswer>;
 
   // ── Backups ────────────────────────────────────────────────────────────────
 

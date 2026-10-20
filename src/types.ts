@@ -1,10 +1,15 @@
 import type {
   Durability,
+  HistoryHoldOperation,
   KeyValueResponseCode,
   RangeLockMode,
   RouteProvenance,
   SequenceResponseCode,
   TransactionPriority,
+  WatchEventKind,
+  WatchFrameType,
+  WatchLagReason,
+  WatchScopeKind,
 } from './enums.js';
 import type { HlcTimestamp } from './hlc.js';
 
@@ -144,6 +149,14 @@ export interface TransactionOptions {
    * prefix or range locks, and the option applies to interactive sessions only.
    */
   conflictPolicy?: import('./enums.js').TransactionConflictPolicy;
+  /**
+   * A short label that names what produced this transaction's writes, such as a
+   * schema rewrite or a cleanup sweep. Every prepared intent and every watch event of
+   * the transaction carries it, so a change-feed consumer can tell maintenance writes
+   * from user writes. At most 64 characters. The server keeps it only when the
+   * cluster enables the setting `TransactionOriginTags`.
+   */
+  origin?: string;
 }
 
 /** Identity of one operation inside a transaction, for idempotent replay. */
@@ -410,6 +423,152 @@ export interface SnapshotFloor {
   readonly liveHolds: number;
 }
 
+// ── History holds ────────────────────────────────────────────────────────────
+
+/**
+ * A request to the history hold registry.
+ *
+ * A history hold keeps the log of one data partition on every replica from a
+ * timestamp on, so a watch can resume from that timestamp on any replica. A hold
+ * makes a resume likely, not certain.
+ */
+export interface HistoryHoldRequest {
+  readonly operation: HistoryHoldOperation;
+  /** Acquire: the holder. List: limits the list to this holder. */
+  readonly holderId?: string | null;
+  /** Acquire: the data partitions to hold, one hold each. */
+  readonly partitions?: readonly number[] | null;
+  /**
+   * Acquire: the timestamp to hold from. Renew: the timestamp to move the holds to,
+   * never below their current one. Zero keeps it.
+   */
+  readonly timestamp?: HlcTimestamp;
+  /** Acquire and renew: the lease, in milliseconds from now. */
+  readonly leaseMs?: number;
+  /** Renew and release: the holds. */
+  readonly holdIds?: readonly string[] | null;
+}
+
+/** One registered history hold. */
+export interface HistoryHoldInfo {
+  readonly holdId: string;
+  readonly holderId: string;
+  readonly partitionId: number;
+  readonly timestamp: HlcTimestamp;
+  readonly leaseExpiry: HlcTimestamp;
+}
+
+/**
+ * The registry's answer.
+ *
+ * On success the type is `set` (acquire, renew), `deleted` (release) or `get`
+ * (list), and `holds` lists the holds the request touched or found. A refusal is
+ * `invalidInput`, `doesNotExist` (a named hold was released or purged, so its
+ * history must be presumed reclaimed), `historyHoldLimitReached` or `mustRetry`.
+ */
+export interface HistoryHoldAnswer {
+  readonly type: KeyValueResponseCode;
+  readonly holds: HistoryHoldInfo[];
+}
+
+// ── Watches ──────────────────────────────────────────────────────────────────
+
+/**
+ * The keys a watch covers: one exact key, a prefix, or a half-open key interval
+ * inside one key space. Build one with `watchKey`, `watchPrefix` or `watchRange`.
+ */
+export interface WatchScope {
+  readonly kind: WatchScopeKind;
+  /** The exact key, the prefix, or the key space of a range. */
+  readonly value: string;
+  /** Inclusive lower bound of a range. Null is unbounded. */
+  readonly startKey: string | null;
+  /** Exclusive upper bound of a range. Null is unbounded. */
+  readonly endKey: string | null;
+}
+
+/**
+ * A request to watch a scope.
+ *
+ * To resume, give `resumeFrom` or `resumePartitions`: the node replays every
+ * retained event above the cursor before the live events. The cursor is the last
+ * progress watermark the consumer received for the partition, not the timestamp of
+ * its last event. A resume needs the commit admission window on every node.
+ */
+export interface WatchRequest {
+  readonly scope: WatchScope;
+  /** Must be `persistent`: an ephemeral write is never replicated. */
+  readonly durability?: Durability;
+  /** Drops the value from every event. The key, kind, revision and timestamps stay. */
+  readonly keysOnly?: boolean;
+  /** Frames the node buffers for a slow reader. Zero takes the node's default. */
+  readonly capacity?: number;
+  /** Limits the watch to these partitions of the scope. Null watches every one. */
+  readonly partitions?: readonly number[] | null;
+  /** Replays from here on every partition `resumePartitions` does not name. Zero is live only. */
+  readonly resumeFrom?: HlcTimestamp;
+  /** A cursor per partition. It overrides `resumeFrom` for the partitions it names. */
+  readonly resumePartitions?: ReadonlyMap<number, HlcTimestamp> | null;
+}
+
+/**
+ * One committed mutation of a key, as a watch reports it.
+ *
+ * Delivery is at-least-once. For one key, the first delivery of each revision
+ * arrives in revision order, but a repeat of an older revision can arrive later. A
+ * consumer drops an event whose revision is at or below the last revision it holds
+ * for that key.
+ */
+export interface WatchEvent {
+  readonly key: string;
+  readonly kind: WatchEventKind;
+  /** Null for a delete, an extend and a keys-only watch. */
+  readonly value: Uint8Array | null;
+  readonly revision: number;
+  readonly expires: HlcTimestamp;
+  /** The transaction's commit timestamp, or the write's last-modified timestamp outside one. */
+  readonly commitTimestamp: HlcTimestamp;
+  /** `HLC_ZERO` for a write outside a transaction. */
+  readonly transactionId: HlcTimestamp;
+  /** The data partition whose log carried the mutation. */
+  readonly partitionId: number;
+  /** What produced the transaction that wrote the key. Null for an ordinary write. */
+  readonly origin: string | null;
+}
+
+/** The replicas of one partition, as a node that refused a watch names them. */
+export interface WatchRoute {
+  readonly partitionId: number;
+  /** True when the node that answered hosts the partition. */
+  readonly hostedHere: boolean;
+  /** Advertised client endpoints, the believed leader first. */
+  readonly endpoints: string[];
+}
+
+/** One frame of a watch. `type` says which of the other fields carry data. */
+export interface WatchFrame {
+  readonly type: WatchFrameType;
+  /** The partition the frame is about, or -1 for the whole watch. */
+  readonly partitionId: number;
+  /** Set for an `event` frame. */
+  readonly event: WatchEvent | null;
+  /**
+   * The watermark of a `progress` frame, or the last watermark a `lagged` frame can
+   * vouch for (`HLC_ZERO` when none was sent).
+   */
+  readonly timestamp: HlcTimestamp;
+  /** Set for a `transactionEnd` frame. */
+  readonly transactionId: HlcTimestamp;
+  /** Set for a `lagged` frame. */
+  readonly lagReason: WatchLagReason;
+  /** Set for a `refused` frame. */
+  readonly refusal: KeyValueResponseCode;
+  /** For an `opened` frame: the partitions the watch is registered on. */
+  readonly partitions: number[];
+  /** For a `refused` frame with `doesNotExist`: where each partition is hosted. */
+  readonly routes: WatchRoute[];
+}
+
 // ── Backups ──────────────────────────────────────────────────────────────────
 
 export interface BackupInfo {
@@ -513,4 +672,9 @@ export interface TransactionStart {
 export interface TransactionCommit {
   readonly committed: boolean;
   readonly recordAnchorKey: string | null;
+  /**
+   * The transaction's commit timestamp. `HLC_ZERO` when the commit wrote no
+   * persistent key through the durable path, or the node predates the field.
+   */
+  readonly commitTimestamp: HlcTimestamp;
 }

@@ -365,7 +365,22 @@ export class TransactionSession implements AsyncDisposable {
 
   /** Commits the transaction. Returns false when the server declined to commit it. */
   async commit(options?: { signal?: AbortSignal }): Promise<boolean> {
-    return this.finalize(async () => {
+    return (await this.commitWithTimestamp(options)).committed;
+  }
+
+  /**
+   * Commits the transaction like {@link TransactionSession.commit}, and also returns
+   * the transaction's commit timestamp. Every write of the transaction carries that
+   * timestamp and its watch events report it, so a change-feed consumer can align a
+   * snapshot with a watch cursor. The timestamp is `HLC_ZERO` when the commit wrote no
+   * persistent key through the durable path, or the server predates it.
+   */
+  async commitWithTimestamp(options?: {
+    signal?: AbortSignal;
+  }): Promise<{ committed: boolean; commitTimestamp: HlcTimestamp }> {
+    let commitTimestamp = HLC_ZERO;
+
+    const committed = await this.finalize(async () => {
       try {
         const outcome = await this.transport.commitTransaction(
           this.url,
@@ -377,6 +392,7 @@ export class TransactionSession implements AsyncDisposable {
 
         if (outcome.recordAnchorKey !== null) this.#recordAnchorKey = outcome.recordAnchorKey;
         this.#status = outcome.committed ? 'committed' : 'pending';
+        commitTimestamp = outcome.commitTimestamp;
         return outcome.committed;
       } catch (error) {
         // An abort is terminal: the server has already finalized the transaction, so
@@ -385,6 +401,8 @@ export class TransactionSession implements AsyncDisposable {
         throw error;
       }
     }, 'commit');
+
+    return { committed, commitTimestamp };
   }
 
   /** Rolls the transaction back. Returns false when the server declined to do so. */
@@ -499,7 +517,14 @@ export class TransactionSession implements AsyncDisposable {
           { transaction: this.context(), signal },
         );
       } catch (error) {
-        if (isKeyValueCode(error, 'alreadyLocked') || isKeyValueCode(error, 'mustRetry')) {
+        // `alreadyLocked` and `mustRetry` are a live holder. `waitingForReplication` is lag:
+        // a holder that already decided and is settling, or a decision in flight. All
+        // three clear on their own.
+        if (
+          isKeyValueCode(error, 'alreadyLocked') ||
+          isKeyValueCode(error, 'mustRetry') ||
+          isKeyValueCode(error, 'waitingForReplication')
+        ) {
           acquired = false;
           denial = (error as KahunaError).code;
         } else {

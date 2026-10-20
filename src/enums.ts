@@ -47,7 +47,9 @@ export type KeyValueResponseCode =
   | 'prefixLockUnsupportedOnRangedSpace'
   | 'rangeLocks'
   | 'safeTimestamp'
-  | 'admissionRefused';
+  | 'admissionRefused'
+  | 'watchUnsupportedOnEphemeral'
+  | 'historyHoldLimitReached';
 
 /** Outcome code of a sequence operation. */
 export type SequenceResponseCode =
@@ -109,6 +111,103 @@ export type RoutingDomain = 'keyValue' | 'lock' | 'sequence';
 /** How the client picks the node to send an operation to. */
 export type RoutingMode = 'auto' | 'roundRobin' | 'learned' | 'metadata';
 
+/**
+ * Which arm of the coordinator refused a transaction commit. The response code says
+ * whether the refusal is terminal (`aborted`) or retryable (`mustRetry`); this class
+ * says why, so a caller can report it without reading server logs.
+ */
+export type CommitRefusalClass =
+  /** The commit was not refused, or the node does not report a class. */
+  | 'none'
+  /** Another transaction's write or lock conflicts with this transaction. */
+  | 'conflict'
+  /** Another commit overtook a validated base of a staged write. */
+  | 'stagedBaseMoved'
+  /** The decision deadline passed before the decision was recorded. */
+  | 'decisionDeadline'
+  /** The prepare retry budget ran out while other intents held the written keys. */
+  | 'prepareExhausted'
+  /** A partition leader change dropped a lock the transaction held. */
+  | 'lostLock'
+  /** The write intent of a staged write lapsed before the commit probe. */
+  | 'lostStagedIntent'
+  /** A leader change lost a confirmed staging and a later write staged over it. */
+  | 'stagedChainBreak'
+  /** Recovery, a reaper or a rollback fence aborted the canonical record. */
+  | 'presumedAbort'
+  /** The transaction was rolled back explicitly. */
+  | 'explicitRollback'
+  /** The working set cannot be committed as shaped. */
+  | 'invalidWorkingSet'
+  /** The finalize threw before anything durable was proposed. */
+  | 'faulted'
+  /** Retryable: decided predecessors still held the written keys at the deadline. */
+  | 'settlementLag'
+  /** Retryable: the attempt reached no record-backed outcome. */
+  | 'unresolved'
+  /** Retryable after a back-off: the node was at capacity. */
+  | 'admissionCapacity'
+  /** The coordinator does not know the transaction. */
+  | 'unknownTransaction'
+  /** Retryable: the commit timestamp fell outside the commit admission window. */
+  | 'commitTimestampOutsideWindow';
+
+/** What a key/value watch covers. */
+export type WatchScopeKind =
+  /** One exact key. */
+  | 'key'
+  /** Every key that starts with a prefix. */
+  | 'prefix'
+  /** Every key of one key space in the half-open interval `[startKey, endKey)`. */
+  | 'range';
+
+/** The kind of frame a watch delivers. */
+export type WatchFrameType =
+  /** One committed mutation of a key in the scope. */
+  | 'event'
+  /** The progress watermark of a partition: no later event on it is at or below it. */
+  | 'progress'
+  /** The partition delivered every event of one transaction. */
+  | 'transactionEnd'
+  /** The stream lost continuity and ended. Events can be missing. */
+  | 'lagged'
+  /** A resume position is below the history the replica retains. The stream ended. */
+  | 'historyUnavailable'
+  /** The watch was refused. The stream ended. */
+  | 'refused'
+  /** The watch is registered. The client reads this frame and never yields it. */
+  | 'opened';
+
+/** The kind of committed mutation a watch event reports. */
+export type WatchEventKind =
+  /** The key was set to a new value at a new revision. */
+  | 'set'
+  /** The key was deleted. */
+  | 'deleted'
+  /** The key's expiry was refreshed. The value and the revision did not change. */
+  | 'extended';
+
+/** Why a watch stream ended with a `lagged` frame. */
+export type WatchLagReason =
+  | 'none'
+  /** The reader fell a full capacity behind. The backlog was dropped. */
+  | 'overflow'
+  /** The replica replaced the partition's state from a snapshot, an import or a purge. */
+  | 'partitionStateReplaced'
+  /** The replica failed to apply an entry, so it cannot prove it emitted every event. */
+  | 'applyDiscontinuity'
+  /** The range map changed, so the partitions the scope covers changed. */
+  | 'rangeMapChanged'
+  /** The node is shutting down. */
+  | 'shutdown'
+  /** The connection ended without a terminal frame. Set by the client only. */
+  | 'disconnected'
+  /** An event arrived at or below a watermark the replica already sent. */
+  | 'watermarkViolated';
+
+/** What a history hold request asks the registry to do. */
+export type HistoryHoldOperation = 'acquire' | 'renew' | 'release' | 'list';
+
 // ── Wire tables ──────────────────────────────────────────────────────────────
 
 function invert<T extends string>(table: Readonly<Record<T, number>>): Map<number, T> {
@@ -160,6 +259,8 @@ export const KEY_VALUE_RESPONSE_CODES: Readonly<Record<KeyValueResponseCode, num
   rangeLocks: 106,
   safeTimestamp: 107,
   admissionRefused: 108,
+  watchUnsupportedOnEphemeral: 109,
+  historyHoldLimitReached: 110,
 };
 
 export const SEQUENCE_RESPONSE_CODES: Readonly<Record<SequenceResponseCode, number>> = {
@@ -231,11 +332,83 @@ export const ROUTE_PROVENANCE_CODES: Readonly<Record<RouteProvenance, number>> =
   forwarded: 2,
 };
 
+export const COMMIT_REFUSAL_CLASS_CODES: Readonly<Record<CommitRefusalClass, number>> = {
+  none: 0,
+  conflict: 1,
+  stagedBaseMoved: 2,
+  decisionDeadline: 3,
+  prepareExhausted: 4,
+  lostLock: 5,
+  lostStagedIntent: 6,
+  stagedChainBreak: 7,
+  presumedAbort: 8,
+  explicitRollback: 9,
+  invalidWorkingSet: 10,
+  faulted: 11,
+  settlementLag: 12,
+  unresolved: 13,
+  admissionCapacity: 14,
+  unknownTransaction: 15,
+  commitTimestampOutsideWindow: 16,
+};
+
+export const WATCH_SCOPE_KIND_CODES: Readonly<Record<WatchScopeKind, number>> = {
+  key: 0,
+  prefix: 1,
+  range: 2,
+};
+
+export const WATCH_FRAME_TYPE_CODES: Readonly<Record<WatchFrameType, number>> = {
+  event: 0,
+  progress: 1,
+  transactionEnd: 2,
+  lagged: 3,
+  historyUnavailable: 4,
+  refused: 5,
+  opened: 6,
+};
+
+export const WATCH_EVENT_KIND_CODES: Readonly<Record<WatchEventKind, number>> = {
+  set: 0,
+  deleted: 1,
+  extended: 2,
+};
+
+export const WATCH_LAG_REASON_CODES: Readonly<Record<WatchLagReason, number>> = {
+  none: 0,
+  overflow: 1,
+  partitionStateReplaced: 2,
+  applyDiscontinuity: 3,
+  rangeMapChanged: 4,
+  shutdown: 5,
+  disconnected: 6,
+  watermarkViolated: 7,
+};
+
+export const HISTORY_HOLD_OPERATION_CODES: Readonly<Record<HistoryHoldOperation, number>> = {
+  acquire: 0,
+  renew: 1,
+  release: 2,
+  list: 3,
+};
+
 const LOCK_RESPONSE_NAMES = invert(LOCK_RESPONSE_CODES);
 const KEY_VALUE_RESPONSE_NAMES = invert(KEY_VALUE_RESPONSE_CODES);
 const SEQUENCE_RESPONSE_NAMES = invert(SEQUENCE_RESPONSE_CODES);
 const DURABILITY_NAMES = invert(DURABILITY_CODES);
 const ROUTE_PROVENANCE_NAMES = invert(ROUTE_PROVENANCE_CODES);
+const COMMIT_REFUSAL_CLASS_NAMES = invert(COMMIT_REFUSAL_CLASS_CODES);
+const WATCH_FRAME_TYPE_NAMES = invert(WATCH_FRAME_TYPE_CODES);
+const WATCH_EVENT_KIND_NAMES = invert(WATCH_EVENT_KIND_CODES);
+const WATCH_LAG_REASON_NAMES = invert(WATCH_LAG_REASON_CODES);
+
+/**
+ * True when the server asked for the same request again: `mustRetry`, or
+ * `waitingForReplication`, which is lag rather than a conflict and clears on its own.
+ */
+export function isTransientKeyValueCode(code: KeyValueResponseCode): boolean {
+  return code === 'mustRetry' || code === 'waitingForReplication';
+}
 
 export function lockResponseFromCode(code: number | undefined): LockResponseCode {
   return LOCK_RESPONSE_NAMES.get(code ?? 0) ?? 'errored';
@@ -255,4 +428,25 @@ export function durabilityFromCode(code: number | undefined): Durability {
 
 export function routeProvenanceFromCode(code: number | undefined): RouteProvenance {
   return ROUTE_PROVENANCE_NAMES.get(code ?? 0) ?? 'unknown';
+}
+
+/**
+ * Carried as an integer on the wire so a newer node can name a class an older
+ * client does not know. Such a class reads as `none`.
+ */
+export function commitRefusalFromCode(code: number | undefined): CommitRefusalClass {
+  return COMMIT_REFUSAL_CLASS_NAMES.get(code ?? 0) ?? 'none';
+}
+
+/** An unknown frame type reads as `refused`, the way the server's own decoder reads it. */
+export function watchFrameTypeFromCode(code: number | undefined): WatchFrameType {
+  return WATCH_FRAME_TYPE_NAMES.get(code ?? 0) ?? 'refused';
+}
+
+export function watchEventKindFromCode(code: number | undefined): WatchEventKind {
+  return WATCH_EVENT_KIND_NAMES.get(code ?? 0) ?? 'set';
+}
+
+export function watchLagReasonFromCode(code: number | undefined): WatchLagReason {
+  return WATCH_LAG_REASON_NAMES.get(code ?? 0) ?? 'none';
 }

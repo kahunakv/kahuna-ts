@@ -16,6 +16,7 @@ import { RouteCache } from './routing/route-cache.js';
 import { RoutingEndpointPolicy } from './routing/endpoint-policy.js';
 import { TransactionScript, type ScriptRunner } from './transaction-script.js';
 import { TransactionSession } from './transaction-session.js';
+import { KahunaWatch, WatchOpener } from './watch.js';
 import { newLockOwner, textToBytes, toBytes } from './transport/codec.js';
 import { GrpcTransport } from './transport/grpc.js';
 import { RestTransport } from './transport/rest.js';
@@ -30,6 +31,7 @@ import type {
   DeleteManyItem,
   ExtendOutcome,
   GetManyItem,
+  HistoryHoldAnswer,
   LockInfo,
   MergeRangesResult,
   RangeBounds,
@@ -49,6 +51,7 @@ import type {
   SplitRangeResult,
   TransactionOptions,
   ValueInput,
+  WatchRequest,
 } from './types.js';
 
 /** Options every read of a single key accepts. */
@@ -90,6 +93,19 @@ export interface RangeOptions extends ReadOptions {
   readonly limit?: number;
 }
 
+/** Options opening a watch accepts. */
+export interface WatchOptions {
+  /**
+   * Reopens a node stream that loses continuity from the last progress watermarks of
+   * its partitions, and the node replays what was missed. A resume needs the commit
+   * admission window on the cluster. Without it the nodes send no watermark, and the
+   * watch ends as it would with no resume.
+   */
+  readonly autoResume?: boolean;
+  /** Bounds the opening only. Close the watch to end it. */
+  readonly signal?: AbortSignal;
+}
+
 /** Options a script run accepts. */
 export interface ExecuteScriptOptions {
   readonly hash?: string | null;
@@ -118,6 +134,8 @@ export class KahunaClient implements EntryOwner, LockOwner, ScriptRunner, AsyncD
   readonly #effectiveRouting: RoutingMode;
 
   #nextEndpoint = 0;
+
+  #watchOpener: WatchOpener | null = null;
 
   constructor(options: KahunaClientOptions) {
     this.#options = resolveOptions(options);
@@ -581,6 +599,38 @@ export class KahunaClient implements EntryOwner, LockOwner, ScriptRunner, AsyncD
     for await (const item of items) yield this.entryFromScan(item, durability);
   }
 
+  // ── Watches ────────────────────────────────────────────────────────────────
+
+  /**
+   * Opens a watch on the keys of a scope: a frame for every committed mutation of a
+   * key in the scope from now on. When the promise resolves, the watch is registered
+   * on every partition the scope covers. See {@link KahunaWatch} for the delivery
+   * contract and the endings.
+   *
+   * Any replica serves a watch. When the node asked does not host every partition of
+   * the scope, the client opens the watch on the replicas that node names, one node
+   * per group of partitions. The client dials a replica endpoint only when it
+   * resolves to a configured endpoint, through `routingEndpointMap`, or when
+   * `allowUnlistedRoutingEndpoints` is on.
+   *
+   * Throws a `KahunaError` with `watchUnsupportedOnEphemeral` for ephemeral keys,
+   * with `doesNotExist` when no reachable replica hosts part of the scope, and with
+   * `mustRetry` when the opening kept failing transiently.
+   */
+  watchKeyValues(request: WatchRequest, options?: WatchOptions): Promise<KahunaWatch> {
+    this.#watchOpener ??= new WatchOpener(
+      this.#transport,
+      new RoutingEndpointPolicy(
+        this.#options.endpoints,
+        this.#options.routingEndpointMap,
+        this.#options.allowUnlistedRoutingEndpoints,
+      ),
+      () => this.nextEndpoint(),
+    );
+
+    return this.#watchOpener.open(request, options?.autoResume ?? false, options?.signal);
+  }
+
   // ── Transactions ───────────────────────────────────────────────────────────
 
   /** Parses a script once, so later runs reuse the server's parsed form. */
@@ -952,6 +1002,70 @@ export class KahunaClient implements EntryOwner, LockOwner, ScriptRunner, AsyncD
 
   getSnapshotFloor(options?: CallOptions): Promise<SnapshotFloor> {
     return this.#transport.getSnapshotFloor(this.nextEndpoint(), options);
+  }
+
+  // ── History holds ──────────────────────────────────────────────────────────
+
+  /**
+   * Holds the history of each partition from a timestamp for a holder: every replica
+   * keeps the partition's log from there on, so a watch can resume from that
+   * timestamp on any of them. There is one hold per partition. An acquire that names
+   * a partition the holder already holds renews that hold and moves it forward.
+   *
+   * Move the holds forward with {@link KahunaClient.renewHistoryHolds} as the consumer
+   * commits its progress, so the retained log shrinks. A hold makes a resume likely,
+   * not certain.
+   */
+  acquireHistoryHolds(
+    holderId: string,
+    partitions: readonly number[],
+    timestamp: HlcTimestamp,
+    leaseMs: number,
+    options?: CallOptions,
+  ): Promise<HistoryHoldAnswer> {
+    return this.#transport.historyHold(
+      this.nextEndpoint(),
+      { operation: 'acquire', holderId, partitions, timestamp, leaseMs },
+      options,
+    );
+  }
+
+  /**
+   * Renews the lease of the holds. When `timestamp` is not zero, it also moves them
+   * forward to it, never back. `doesNotExist` means a hold was released or purged,
+   * and its history must be presumed reclaimed.
+   */
+  renewHistoryHolds(
+    holdIds: readonly string[],
+    leaseMs: number,
+    options?: { timestamp?: HlcTimestamp; signal?: AbortSignal },
+  ): Promise<HistoryHoldAnswer> {
+    return this.#transport.historyHold(
+      this.nextEndpoint(),
+      { operation: 'renew', holdIds, leaseMs, timestamp: options?.timestamp ?? HLC_ZERO },
+      { signal: options?.signal },
+    );
+  }
+
+  /** Releases the holds. */
+  releaseHistoryHolds(holdIds: readonly string[], options?: CallOptions): Promise<HistoryHoldAnswer> {
+    return this.#transport.historyHold(
+      this.nextEndpoint(),
+      { operation: 'release', holdIds },
+      options,
+    );
+  }
+
+  /** Lists the registered history holds, of one holder when `holderId` is given. */
+  listHistoryHolds(options?: {
+    holderId?: string;
+    signal?: AbortSignal;
+  }): Promise<HistoryHoldAnswer> {
+    return this.#transport.historyHold(
+      this.nextEndpoint(),
+      { operation: 'list', holderId: options?.holderId ?? null },
+      { signal: options?.signal },
+    );
   }
 
   // ── Backups ────────────────────────────────────────────────────────────────

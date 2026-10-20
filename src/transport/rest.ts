@@ -8,18 +8,32 @@ import {
   TRANSACTION_LOCKING_CODES,
   TRANSACTION_CONFLICT_POLICY_CODES,
   TRANSACTION_PRIORITY_CODES,
+  HISTORY_HOLD_OPERATION_CODES,
+  WATCH_SCOPE_KIND_CODES,
+  commitRefusalFromCode,
   durabilityFromCode,
+  isTransientKeyValueCode,
   keyValueResponseFromCode,
   lockResponseFromCode,
   routeProvenanceFromCode,
   sequenceResponseFromCode,
+  watchEventKindFromCode,
+  watchFrameTypeFromCode,
+  watchLagReasonFromCode,
   type Durability,
   type KeyValueResponseCode,
   type RangeLockMode,
   type RoutingDomain,
   type TransactionPriority,
 } from '../enums.js';
-import { KahunaBackupError, KahunaError, isAbortError, throwIfAborted } from '../errors.js';
+import {
+  KahunaBackupError,
+  KahunaError,
+  OperationAbortedError,
+  commitRefusalError,
+  isAbortError,
+  throwIfAborted,
+} from '../errors.js';
 import { HLC_ZERO, hlcFromJson, hlcToJson, type HlcJson, type HlcTimestamp } from '../hlc.js';
 import type { SecurityOptions } from '../options.js';
 import type {
@@ -34,6 +48,8 @@ import type {
   DeleteManyItem,
   ExtendOutcome,
   GetManyItem,
+  HistoryHoldAnswer,
+  HistoryHoldRequest,
   LockAcquisition,
   LockInfo,
   MergeRangesResult,
@@ -62,11 +78,18 @@ import type {
   TransactionCommit,
   TransactionOptions,
   TransactionStart,
+  WatchFrame,
+  WatchRequest,
   WriteOutcome,
 } from '../types.js';
 import { NO_OPERATION_ID, isOperationIdEmpty } from '../types.js';
 import { payloadFromJson, payloadToJson, requiredPayloadToJson } from './codec.js';
-import { HttpClient, HttpStatusError, isRetriableStatus } from './http.js';
+import {
+  HttpClient,
+  HttpStatusError,
+  isRetriableStatus,
+  type HttpStreamResponse,
+} from './http.js';
 import {
   LazyBackoff,
   MUST_RETRY_ATTEMPTS,
@@ -82,7 +105,15 @@ import type {
   RouteSink,
   TransactionalCallOptions,
   Transport,
+  WatchOpening,
+  WatchStream,
 } from './transport.js';
+import {
+  isTerminalWatchFrame,
+  laggedWatchFrame,
+  refusedWatchOpening,
+  watchOpeningFromAnswer,
+} from '../watch.js';
 
 /** The header a backup endpoint puts its typed outcome in. */
 const BACKUP_OUTCOME_HEADER = 'x-kahuna-backup-outcome';
@@ -197,7 +228,10 @@ export class RestTransport implements Transport {
     }
   }
 
-  /** Sends a key/value request and repeats it while the server answers `mustRetry`. */
+  /**
+   * Sends a key/value request and repeats it while the server answers `mustRetry` or
+   * `waitingForReplication`.
+   */
   private async postKeyValue<T extends JsonRecord>(
     url: string,
     verb: string,
@@ -208,7 +242,9 @@ export class RestTransport implements Transport {
     for (let attempt = 0; ; attempt++) {
       const response = (await this.send(url, `v1/kv/${verb}`, 'POST', body, signal)) as T;
 
-      if (keyValueResponseFromCode(response['type'] as number) !== 'mustRetry') return response;
+      if (!isTransientKeyValueCode(keyValueResponseFromCode(response['type'] as number))) {
+        return response;
+      }
 
       carryForward?.(body, response);
 
@@ -471,8 +507,8 @@ export class RestTransport implements Transport {
       if (++retries >= MUST_RETRY_ATTEMPTS) {
         throw KahunaError.keyValue('Retries exhausted.', 'mustRetry');
       }
-      if (type === 'mustRetry') await waitBeforeMustRetry(retries - 1, options?.signal);
-    } while (type === 'mustRetry');
+      if (isTransientKeyValueCode(type)) await waitBeforeMustRetry(retries - 1, options?.signal);
+    } while (isTransientKeyValueCode(type));
 
     throw KahunaError.keyValue(`Failed to set key/value: ${type}`, type);
   }
@@ -526,8 +562,8 @@ export class RestTransport implements Transport {
       if (++retries >= MUST_RETRY_ATTEMPTS) {
         throw KahunaError.keyValue('Retries exhausted.', 'mustRetry');
       }
-      if (type === 'mustRetry') await waitBeforeMustRetry(retries - 1, options?.signal);
-    } while (type === 'mustRetry');
+      if (isTransientKeyValueCode(type)) await waitBeforeMustRetry(retries - 1, options?.signal);
+    } while (isTransientKeyValueCode(type));
 
     throw KahunaError.keyValue(`Failed to get key/value: ${type}`, type);
   }
@@ -616,8 +652,8 @@ export class RestTransport implements Transport {
       if (++retries >= MUST_RETRY_ATTEMPTS) {
         throw KahunaError.keyValue('Retries exhausted.', 'mustRetry');
       }
-      if (type === 'mustRetry') await waitBeforeMustRetry(retries - 1, options?.signal);
-    } while (type === 'mustRetry');
+      if (isTransientKeyValueCode(type)) await waitBeforeMustRetry(retries - 1, options?.signal);
+    } while (isTransientKeyValueCode(type));
 
     throw failure(type);
   }
@@ -860,6 +896,14 @@ export class RestTransport implements Transport {
     }
   }
 
+  /**
+   * REST serves a watch as a server-sent-events stream: one watch per request, one
+   * frame per event.
+   */
+  async openWatch(url: string, request: WatchRequest, options?: CallOptions): Promise<WatchOpening> {
+    return RestWatchStream.open(this.http, this.bearerToken, joinUrl(url, 'v1/kv/watch'), request, options?.signal);
+  }
+
   // ── Transaction locks ──────────────────────────────────────────────────────
 
   async acquireExclusiveLock(
@@ -997,6 +1041,10 @@ export class RestTransport implements Transport {
       priority: TRANSACTION_PRIORITY_CODES[priority],
     };
 
+    // A script's `mustRetry` is a transient the server already classified, and a re-run
+    // is a new transaction. None of those clear within an immediate re-issue, so the
+    // attempts are spaced like a transaction-session call's.
+    const backoff = new LazyBackoff();
     let retries = 0;
     let type: KeyValueResponseCode;
     let reason: string | null = null;
@@ -1027,10 +1075,12 @@ export class RestTransport implements Transport {
         };
       }
 
+      if (type !== 'mustRetry') break;
+
       if (++retries >= MUST_RETRY_ATTEMPTS) {
         throw KahunaError.keyValue('Retries exhausted.', 'mustRetry');
       }
-      if (type === 'mustRetry') await waitBeforeMustRetry(retries - 1, options?.signal);
+      await backoff.wait(options?.signal);
     } while (type === 'mustRetry');
 
     if (reason) throw KahunaError.keyValue(reason, type);
@@ -1058,6 +1108,7 @@ export class RestTransport implements Transport {
         decisionDurability: DECISION_DURABILITY_CODES[options.decisionDurability ?? 'bestEffort'],
         priority: TRANSACTION_PRIORITY_CODES[options.priority ?? 'normal'],
         conflictPolicy: TRANSACTION_CONFLICT_POLICY_CODES[options.conflictPolicy ?? 'normal'],
+        origin: options.origin ?? null,
         readTimestamp: hlcToJson(options.readTimestamp),
       },
       call?.signal,
@@ -1092,9 +1143,19 @@ export class RestTransport implements Transport {
 
     const type = keyValueResponseFromCode(response['type'] as number);
     if (type === 'committed') {
-      return { committed: true, recordAnchorKey: stringOrNull(response['recordAnchorKey']) };
+      return {
+        committed: true,
+        recordAnchorKey: stringOrNull(response['recordAnchorKey']),
+        commitTimestamp: hlcFromJson(response['commitTimestamp'] as HlcJson | null),
+      };
     }
-    throw KahunaError.keyValue(`Failed to commit key/value transaction: ${type}`, type);
+    // The answer names the arm that refused the commit, so a caller can tell a
+    // conflict from a lost lock or a deadline without reading server logs.
+    throw commitRefusalError(
+      type,
+      commitRefusalFromCode(response['refusal'] as number),
+      stringOrNull(response['reason']),
+    );
   }
 
   async rollbackTransaction(
@@ -1582,6 +1643,40 @@ export class RestTransport implements Transport {
     };
   }
 
+  // ── History holds ──────────────────────────────────────────────────────────
+
+  async historyHold(
+    url: string,
+    request: HistoryHoldRequest,
+    options?: CallOptions,
+  ): Promise<HistoryHoldAnswer> {
+    const response = await this.send(
+      url,
+      'v1/kv/history-holds',
+      'POST',
+      {
+        operation: HISTORY_HOLD_OPERATION_CODES[request.operation],
+        holderId: request.holderId ?? null,
+        partitions: request.partitions ? [...request.partitions] : null,
+        timestamp: hlcToJson(request.timestamp),
+        leaseMs: request.leaseMs ?? 0,
+        holdIds: request.holdIds ? [...request.holdIds] : null,
+      },
+      options?.signal,
+    );
+
+    return {
+      type: keyValueResponseFromCode(response['type'] as number),
+      holds: asArray(response['holds']).map((hold) => ({
+        holdId: stringOf(hold['holdId']),
+        holderId: stringOf(hold['holderId']),
+        partitionId: numberOf(hold['partitionId']),
+        timestamp: hlcFromJson(hold['timestamp'] as HlcJson | null),
+        leaseExpiry: hlcFromJson(hold['leaseExpiry'] as HlcJson | null),
+      })),
+    };
+  }
+
   // ── Backups ────────────────────────────────────────────────────────────────
 
   async takeFullBackup(url: string, options?: CallOptions): Promise<BackupInfo> {
@@ -1717,6 +1812,247 @@ export class RestTransport implements Transport {
       throw error;
     }
   }
+}
+
+// ── Watch streams ────────────────────────────────────────────────────────────
+
+const EVENT_STREAM_MEDIA_TYPE = 'text/event-stream';
+
+/**
+ * One watch read from the server-sent-events stream of `POST /v1/kv/watch`.
+ *
+ * Each event is one `data` line that holds one frame. Blank lines end events, and
+ * lines that start with `:` are comments. The stream skips both.
+ */
+class RestWatchStream implements WatchStream {
+  readonly #lines: AsyncIterator<string>;
+
+  readonly #lifetime: AbortController;
+
+  readonly #body: HttpStreamResponse['body'];
+
+  #closed = false;
+
+  private constructor(body: HttpStreamResponse['body'], lifetime: AbortController) {
+    this.#body = body;
+    this.#lifetime = lifetime;
+    this.#lines = readLines(body);
+  }
+
+  /**
+   * Opens the watch and waits for the node's answer. A transport failure before the
+   * answer comes back as a `mustRetry` refusal: no watch is registered.
+   */
+  static async open(
+    http: HttpClient,
+    bearerToken: string,
+    target: string,
+    request: WatchRequest,
+    signal: AbortSignal | undefined,
+  ): Promise<WatchOpening> {
+    throwIfAborted(signal);
+
+    // The caller's signal bounds only the opening. The open stream lives until it is closed.
+    const lifetime = new AbortController();
+    const onAbort = (): void => lifetime.abort(signal?.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    let stream: RestWatchStream | null = null;
+
+    try {
+      const response = await http.openStream({
+        method: 'POST',
+        url: target,
+        body: new TextEncoder().encode(JSON.stringify(watchRequestBody(request))),
+        bearerToken,
+        signal: lifetime.signal,
+        accept: EVENT_STREAM_MEDIA_TYPE,
+      });
+
+      // A node that could not start the watch answers with a plain body, not a stream.
+      const contentType = headerOf(response.headers, 'content-type') ?? '';
+      if (response.status >= 400 || !contentType.toLowerCase().startsWith(EVENT_STREAM_MEDIA_TYPE)) {
+        const text = await response.body.text();
+        if (response.status >= 400) throw new HttpStatusError(response.status, text, target, response.headers);
+
+        const refusal = text.length === 0 ? {} : (JSON.parse(text) as JsonRecord);
+        return refusedWatchOpening(
+          refusal['type'] === undefined ? 'errored' : keyValueResponseFromCode(refusal['type'] as number),
+        );
+      }
+
+      stream = new RestWatchStream(response.body, lifetime);
+
+      const answer = await stream.#readFrame();
+      if (answer === null) {
+        await stream.close();
+        return refusedWatchOpening('mustRetry');
+      }
+
+      const opening = watchOpeningFromAnswer(answer, stream);
+      if (opening.stream === null) await stream.close();
+      return opening;
+    } catch (error) {
+      if (stream !== null) await stream.close();
+      else lifetime.abort();
+
+      if (signal?.aborted) throw new OperationAbortedError('Operation aborted', { cause: signal.reason });
+      if (!(error instanceof HttpStatusError) || isRetriableStatus(error.status)) {
+        return refusedWatchOpening('mustRetry');
+      }
+      throw error;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  /** The next frame on the stream, or null when the stream ended. */
+  async #readFrame(): Promise<WatchFrame | null> {
+    for (;;) {
+      const next = await this.#lines.next();
+      if (next.done) return null;
+
+      const line = next.value;
+      if (!line.startsWith('data:')) continue;
+
+      return readWatchFrame(JSON.parse(line.slice(5).trimStart()) as JsonRecord);
+    }
+  }
+
+  async *frames(signal?: AbortSignal): AsyncGenerator<WatchFrame> {
+    const onAbort = (): void => this.#lifetime.abort(signal?.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      for (;;) {
+        let frame: WatchFrame | null;
+
+        try {
+          frame = await this.#readFrame();
+        } catch {
+          frame = null;
+        }
+
+        if (frame === null) {
+          if (this.#closed) return;
+          if (signal?.aborted) {
+            throw new OperationAbortedError('Operation aborted', { cause: signal.reason });
+          }
+          // The stream ended without a terminal frame, so events can be missing from here.
+          yield laggedWatchFrame(-1, 'disconnected', HLC_ZERO);
+          return;
+        }
+
+        yield frame;
+        if (isTerminalWatchFrame(frame)) return;
+      }
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.#closed) return;
+    this.#closed = true;
+
+    // Aborting the request closes the server's stream, which closes and unregisters the watch.
+    this.#lifetime.abort();
+    this.#body.destroy();
+  }
+}
+
+/** Splits a byte stream into lines, without their `\n` or `\r\n` endings. */
+async function* readLines(body: AsyncIterable<Uint8Array>): AsyncGenerator<string> {
+  const decoder = new TextDecoder();
+  let buffered = '';
+
+  for await (const chunk of body) {
+    buffered += decoder.decode(chunk, { stream: true });
+
+    for (let end = buffered.indexOf('\n'); end >= 0; end = buffered.indexOf('\n')) {
+      const line = buffered.slice(0, end);
+      buffered = buffered.slice(end + 1);
+      yield line.endsWith('\r') ? line.slice(0, -1) : line;
+    }
+  }
+
+  buffered += decoder.decode();
+  if (buffered.length > 0) yield buffered;
+}
+
+function watchRequestBody(request: WatchRequest): JsonRecord {
+  return {
+    scopeKind: WATCH_SCOPE_KIND_CODES[request.scope.kind],
+    scopeValue: request.scope.value,
+    startKey: request.scope.startKey,
+    endKey: request.scope.endKey,
+    durability: DURABILITY_CODES[request.durability ?? 'persistent'],
+    keysOnly: request.keysOnly ?? false,
+    capacity: request.capacity ?? 0,
+    partitions: request.partitions ? [...request.partitions] : null,
+    resumeFrom: hlcToJson(request.resumeFrom),
+    resumePartitions: request.resumePartitions
+      ? [...request.resumePartitions].map(([partitionId, cursor]) => ({
+          partitionId,
+          timestamp: hlcToJson(cursor),
+        }))
+      : null,
+  };
+}
+
+function readWatchFrame(wire: JsonRecord): WatchFrame {
+  const type = watchFrameTypeFromCode(wire['frame'] as number);
+  const partitionId = numberOf(wire['partitionId']);
+  const transactionId = hlcFromJson(wire['transactionId'] as HlcJson | null);
+
+  return {
+    type,
+    partitionId,
+    event:
+      type === 'event'
+        ? {
+            key: stringOf(wire['key']),
+            kind: watchEventKindFromCode(wire['kind'] as number),
+            value: payloadFromJson(wire['value'] as string | null),
+            revision: numberOf(wire['revision']),
+            expires: hlcFromJson(wire['expires'] as HlcJson | null),
+            commitTimestamp: hlcFromJson(wire['commitTimestamp'] as HlcJson | null),
+            transactionId,
+            partitionId,
+            origin: stringOrNull(wire['origin']),
+          }
+        : null,
+    timestamp:
+      type === 'progress' || type === 'lagged'
+        ? hlcFromJson(wire['timestamp'] as HlcJson | null)
+        : HLC_ZERO,
+    transactionId: type === 'transactionEnd' ? transactionId : HLC_ZERO,
+    lagReason: type === 'lagged' ? watchLagReasonFromCode(wire['lagReason'] as number) : 'none',
+    refusal: type === 'refused' ? keyValueResponseFromCode(wire['type'] as number) : 'get',
+    partitions:
+      type === 'opened' && Array.isArray(wire['partitions'])
+        ? (wire['partitions'] as unknown[]).map(numberOf)
+        : [],
+    routes:
+      type === 'refused'
+        ? asArray(wire['routes']).map((route) => ({
+            partitionId: numberOf(route['partitionId']),
+            hostedHere: route['hostedHere'] === true,
+            endpoints: Array.isArray(route['endpoints'])
+              ? (route['endpoints'] as unknown[]).filter((e): e is string => typeof e === 'string')
+              : [],
+          }))
+        : [],
+  };
+}
+
+function headerOf(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | null {
+  const value = headers[name];
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
 }
 
 // ── Parsing helpers ──────────────────────────────────────────────────────────

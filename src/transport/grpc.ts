@@ -10,18 +10,32 @@ import {
   TRANSACTION_LOCKING_CODES,
   TRANSACTION_CONFLICT_POLICY_CODES,
   TRANSACTION_PRIORITY_CODES,
+  HISTORY_HOLD_OPERATION_CODES,
+  WATCH_SCOPE_KIND_CODES,
+  commitRefusalFromCode,
   durabilityFromCode,
+  isTransientKeyValueCode,
   keyValueResponseFromCode,
   lockResponseFromCode,
   routeProvenanceFromCode,
   sequenceResponseFromCode,
+  watchEventKindFromCode,
+  watchFrameTypeFromCode,
+  watchLagReasonFromCode,
   type Durability,
   type KeyValueResponseCode,
   type RangeLockMode,
   type RoutingDomain,
   type TransactionPriority,
 } from '../enums.js';
-import { KahunaBackupError, KahunaError, isAbortError, throwIfAborted } from '../errors.js';
+import {
+  KahunaBackupError,
+  KahunaError,
+  OperationAbortedError,
+  commitRefusalError,
+  isAbortError,
+  throwIfAborted,
+} from '../errors.js';
 import { HLC_ZERO, type HlcTimestamp } from '../hlc.js';
 import type { SecurityOptions } from '../options.js';
 import type {
@@ -36,6 +50,8 @@ import type {
   DeleteManyItem,
   ExtendOutcome,
   GetManyItem,
+  HistoryHoldAnswer,
+  HistoryHoldRequest,
   LockAcquisition,
   LockInfo,
   MergeRangesResult,
@@ -64,6 +80,8 @@ import type {
   TransactionCommit,
   TransactionOptions,
   TransactionStart,
+  WatchFrame,
+  WatchRequest,
   WriteOutcome,
 } from '../types.js';
 import { NO_OPERATION_ID, isOperationIdEmpty } from '../types.js';
@@ -81,7 +99,15 @@ import type {
   RouteSink,
   TransactionalCallOptions,
   Transport,
+  WatchOpening,
+  WatchStream,
 } from './transport.js';
+import {
+  isTerminalWatchFrame,
+  laggedWatchFrame,
+  refusedWatchOpening,
+  watchOpeningFromAnswer,
+} from '../watch.js';
 
 /** The trailer a backup RPC puts its typed outcome in. */
 const BACKUP_OUTCOME_TRAILER = 'kahuna-backup-outcome';
@@ -165,7 +191,10 @@ export class GrpcTransport implements Transport {
     );
   }
 
-  /** Runs a key/value RPC and repeats it while the server answers `mustRetry`. */
+  /**
+   * Runs a key/value RPC and repeats it while the server answers `mustRetry` or
+   * `waitingForReplication`.
+   */
   private async callWithMustRetry<T extends Message>(
     url: string,
     method: string,
@@ -177,7 +206,9 @@ export class GrpcTransport implements Transport {
 
     for (let attempt = 0; ; attempt++) {
       const response = await this.call<T>(url, client, method, request, signal);
-      if (keyValueResponseFromCode(response['Type'] as number) !== 'mustRetry') return response;
+      if (!isTransientKeyValueCode(keyValueResponseFromCode(response['Type'] as number))) {
+        return response;
+      }
 
       carryForward?.(request, response);
 
@@ -433,8 +464,8 @@ export class GrpcTransport implements Transport {
       if (++retries >= MUST_RETRY_ATTEMPTS) {
         throw KahunaError.keyValue('Retries exhausted.', 'mustRetry');
       }
-      if (type === 'mustRetry') await waitBeforeMustRetry(retries - 1, options?.signal);
-    } while (type === 'mustRetry');
+      if (isTransientKeyValueCode(type)) await waitBeforeMustRetry(retries - 1, options?.signal);
+    } while (isTransientKeyValueCode(type));
 
     throw KahunaError.keyValue(`Failed to set key/value: ${type}`, type);
   }
@@ -496,8 +527,8 @@ export class GrpcTransport implements Transport {
       if (++retries >= MUST_RETRY_ATTEMPTS) {
         throw KahunaError.keyValue('Retries exhausted.', 'mustRetry');
       }
-      if (type === 'mustRetry') await waitBeforeMustRetry(retries - 1, options?.signal);
-    } while (type === 'mustRetry');
+      if (isTransientKeyValueCode(type)) await waitBeforeMustRetry(retries - 1, options?.signal);
+    } while (isTransientKeyValueCode(type));
 
     throw KahunaError.keyValue(`Failed to get key/value: ${type}`, type);
   }
@@ -587,8 +618,8 @@ export class GrpcTransport implements Transport {
       if (++retries >= MUST_RETRY_ATTEMPTS) {
         throw KahunaError.keyValue('Retries exhausted.', 'mustRetry');
       }
-      if (type === 'mustRetry') await waitBeforeMustRetry(retries - 1, options?.signal);
-    } while (type === 'mustRetry');
+      if (isTransientKeyValueCode(type)) await waitBeforeMustRetry(retries - 1, options?.signal);
+    } while (isTransientKeyValueCode(type));
 
     throw failure(type);
   }
@@ -831,6 +862,15 @@ export class GrpcTransport implements Transport {
     }
   }
 
+  /**
+   * A watch is a long-lived bidirectional call on the shared channel. The call can
+   * carry many watches; this client opens one per call, so a dropped call ends
+   * exactly one watch.
+   */
+  async openWatch(url: string, request: WatchRequest, options?: CallOptions): Promise<WatchOpening> {
+    return GrpcWatchStream.open(this.services(url).keyValuer, request, options?.signal);
+  }
+
   // ── Transaction locks ──────────────────────────────────────────────────────
 
   async acquireExclusiveLock(
@@ -974,6 +1014,10 @@ export class GrpcTransport implements Transport {
     if (hash !== null) request['Hash'] = hash;
 
     const client = this.services(url).keyValuer;
+    // A script's `mustRetry` is a transient the server already classified, and a re-run
+    // is a new transaction. None of those clear within an immediate re-issue, so the
+    // attempts are spaced like a transaction-session call's.
+    const backoff = new LazyBackoff();
     let retries = 0;
     let type: KeyValueResponseCode;
     let reason: string | null = null;
@@ -1008,10 +1052,12 @@ export class GrpcTransport implements Transport {
         };
       }
 
+      if (type !== 'mustRetry') break;
+
       if (++retries >= MUST_RETRY_ATTEMPTS) {
         throw KahunaError.keyValue('Retries exhausted.', 'mustRetry');
       }
-      if (type === 'mustRetry') await waitBeforeMustRetry(retries - 1, options?.signal);
+      await backoff.wait(options?.signal);
     } while (type === 'mustRetry');
 
     if (reason) throw KahunaError.keyValue(reason, type);
@@ -1040,6 +1086,7 @@ export class GrpcTransport implements Transport {
         Priority: TRANSACTION_PRIORITY_CODES[options.priority ?? 'normal'] + 1,
         AdmissionWaitMs: options.admissionWaitMs ?? 0,
         ConflictPolicy: TRANSACTION_CONFLICT_POLICY_CODES[options.conflictPolicy ?? 'normal'] + 1,
+        ...(options.origin === undefined ? {} : { Origin: options.origin }),
       },
       call?.signal,
     );
@@ -1075,9 +1122,19 @@ export class GrpcTransport implements Transport {
 
     const type = keyValueResponseFromCode(response['Type'] as number);
     if (type === 'committed') {
-      return { committed: true, recordAnchorKey: stringOrNull(response['RecordAnchorKey']) };
+      return {
+        committed: true,
+        recordAnchorKey: stringOrNull(response['RecordAnchorKey']),
+        commitTimestamp: readHlc(response, 'CommitTimestamp'),
+      };
     }
-    throw KahunaError.keyValue(`Failed to commit key/value transaction: ${type}`, type);
+    // The answer names the arm that refused the commit, so a caller can tell a
+    // conflict from a lost lock or a deadline without reading server logs.
+    throw commitRefusalError(
+      type,
+      commitRefusalFromCode(response['Refusal'] as number),
+      stringOrNull(response['Reason']),
+    );
   }
 
   async rollbackTransaction(
@@ -1571,6 +1628,44 @@ export class GrpcTransport implements Transport {
     };
   }
 
+  // ── History holds ──────────────────────────────────────────────────────────
+
+  async historyHold(
+    url: string,
+    request: HistoryHoldRequest,
+    options?: CallOptions,
+  ): Promise<HistoryHoldAnswer> {
+    const message: Message = {
+      Operation: HISTORY_HOLD_OPERATION_CODES[request.operation],
+      Partitions: [...(request.partitions ?? [])],
+      ...hlcFields('Timestamp', request.timestamp),
+      LeaseMs: request.leaseMs ?? 0,
+      HoldIds: [...(request.holdIds ?? [])],
+    };
+    if (request.holderId !== null && request.holderId !== undefined) {
+      message['HolderId'] = request.holderId;
+    }
+
+    const response = await this.call<Message>(
+      url,
+      this.services(url).keyValuer,
+      'HistoryHold',
+      message,
+      options?.signal,
+    );
+
+    return {
+      type: keyValueResponseFromCode(response['Type'] as number),
+      holds: asArray(response['Holds']).map((hold) => ({
+        holdId: stringOf(hold['HoldId']),
+        holderId: stringOf(hold['HolderId']),
+        partitionId: numberOf(hold['PartitionId']),
+        timestamp: readHlc(hold, 'Timestamp'),
+        leaseExpiry: readHlc(hold, 'LeaseExpiry'),
+      })),
+    };
+  }
+
   // ── Backups ────────────────────────────────────────────────────────────────
 
   async takeFullBackup(url: string, options?: CallOptions): Promise<BackupInfo> {
@@ -1770,7 +1865,243 @@ async function* invokeServerStream<T>(
   }
 }
 
+// ── Watch streams ────────────────────────────────────────────────────────────
+
+/** The id of the one watch each call carries. */
+const WATCH_ID = 1;
+
+/** `WATCH_REQUEST_OPEN` of the proto's `GrpcWatchRequestType`. */
+const WATCH_REQUEST_OPEN = 0;
+
+/**
+ * Statuses of a call that ended before the node answered: CANCELLED,
+ * DEADLINE_EXCEEDED and UNAVAILABLE. They leave no watch registered, so the
+ * opening is safe to repeat.
+ */
+const RETRYABLE_WATCH_STATUSES = new Set([1, 4, 14]);
+
+interface DuplexCall extends AsyncIterable<Message> {
+  write(message: Message): boolean;
+  end(): void;
+  cancel(): void;
+  on(event: 'error', listener: (error: Error) => void): unknown;
+}
+
+/**
+ * One watch on one call of the bidirectional `Watch` RPC.
+ *
+ * The call runs on the shared channel to the node. A call is an HTTP/2 stream on
+ * that channel, not a connection of its own.
+ */
+class GrpcWatchStream implements WatchStream {
+  readonly #call: DuplexCall;
+
+  readonly #messages: AsyncIterator<Message>;
+
+  /** Frames that arrived in the same message as the answer, delivered before the next read. */
+  readonly #pending: WatchFrame[] = [];
+
+  #closed = false;
+
+  private constructor(call: DuplexCall) {
+    this.#call = call;
+    // The async iterator reports a failed call to its reader. Without a listener of its
+    // own, the error a cancelled call emits after its reader left would crash the process.
+    call.on('error', () => undefined);
+    this.#messages = call[Symbol.asyncIterator]();
+  }
+
+  /**
+   * Opens the watch and waits for the node's answer. A transport failure before the
+   * answer comes back as a `mustRetry` refusal: no watch is registered.
+   */
+  static async open(
+    client: grpc.Client,
+    request: WatchRequest,
+    signal: AbortSignal | undefined,
+  ): Promise<WatchOpening> {
+    throwIfAborted(signal);
+
+    const invoke = (client as unknown as Record<string, unknown>)['Watch'];
+    if (typeof invoke !== 'function') {
+      throw new TypeError('gRPC method Watch is not defined on this service');
+    }
+
+    const stream = new GrpcWatchStream((invoke as () => DuplexCall).call(client));
+
+    // The caller's signal bounds only the opening. The open stream lives until it is closed.
+    const onAbort = (): void => stream.#call.cancel();
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      stream.#call.write(watchOpenMessage(request));
+
+      const answer = await stream.#readAnswer();
+      if (answer === null) {
+        await stream.close();
+        return refusedWatchOpening('mustRetry');
+      }
+
+      const opening = watchOpeningFromAnswer(answer, stream);
+      if (opening.stream === null) await stream.close();
+      return opening;
+    } catch (error) {
+      await stream.close();
+      if (signal?.aborted) throw new OperationAbortedError('Operation aborted', { cause: signal.reason });
+      if (RETRYABLE_WATCH_STATUSES.has((error as { code?: number }).code ?? -1)) {
+        return refusedWatchOpening('mustRetry');
+      }
+      throw error;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  /** The first frame of the watch is its answer. Null when the call ended before it. */
+  async #readAnswer(): Promise<WatchFrame | null> {
+    for (;;) {
+      const next = await this.#messages.next();
+      if (next.done) return null;
+
+      let answer: WatchFrame | null = null;
+      for (const wire of asArray(next.value['Frames'])) {
+        if (numberOf(wire['WatchId']) !== WATCH_ID) continue;
+
+        const frame = readWatchFrame(wire);
+        if (answer === null) answer = frame;
+        else this.#pending.push(frame);
+      }
+
+      if (answer !== null) return answer;
+    }
+  }
+
+  async *frames(signal?: AbortSignal): AsyncGenerator<WatchFrame> {
+    for (let frame = this.#pending.shift(); frame !== undefined; frame = this.#pending.shift()) {
+      yield frame;
+      if (isTerminalWatchFrame(frame)) return;
+    }
+
+    const onAbort = (): void => this.#call.cancel();
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      for (;;) {
+        let next: IteratorResult<Message>;
+
+        try {
+          next = await this.#messages.next();
+        } catch {
+          next = { done: true, value: undefined };
+        }
+
+        if (next.done) {
+          if (this.#closed) return;
+          if (signal?.aborted) {
+            throw new OperationAbortedError('Operation aborted', { cause: signal.reason });
+          }
+          // The call ended without a terminal frame, so events can be missing from here.
+          yield laggedWatchFrame(-1, 'disconnected', HLC_ZERO);
+          return;
+        }
+
+        for (const wire of asArray(next.value['Frames'])) {
+          if (numberOf(wire['WatchId']) !== WATCH_ID) continue;
+
+          const frame = readWatchFrame(wire);
+          yield frame;
+          if (isTerminalWatchFrame(frame)) return;
+        }
+      }
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.#closed) return;
+    this.#closed = true;
+
+    // Ending the request stream ends the call on the server, which closes the watch.
+    // Cancelling the call covers a server that no longer reads.
+    try {
+      this.#call.end();
+    } catch {
+      // The call already ended.
+    }
+    this.#call.cancel();
+  }
+}
+
+function watchOpenMessage(request: WatchRequest): Message {
+  const message: Message = {
+    Type: WATCH_REQUEST_OPEN,
+    WatchId: WATCH_ID,
+    ScopeKind: WATCH_SCOPE_KIND_CODES[request.scope.kind],
+    ScopeValue: request.scope.value,
+    Durability: DURABILITY_CODES[request.durability ?? 'persistent'],
+    KeysOnly: request.keysOnly ?? false,
+    Capacity: request.capacity ?? 0,
+    Partitions: [...(request.partitions ?? [])],
+    ...hlcFields('ResumeFrom', request.resumeFrom),
+    ResumePartitions: [...(request.resumePartitions ?? [])].map(([partitionId, cursor]) => ({
+      PartitionId: partitionId,
+      ...hlcFields('Timestamp', cursor),
+    })),
+  };
+
+  // Absent is unbounded; an empty string is a real bound.
+  if (request.scope.startKey !== null) message['StartKey'] = request.scope.startKey;
+  if (request.scope.endKey !== null) message['EndKey'] = request.scope.endKey;
+  return message;
+}
+
+function readWatchFrame(wire: Message): WatchFrame {
+  const type = watchFrameTypeFromCode(wire['Type'] as number);
+  const partitionId = numberOf(wire['PartitionId']);
+  const transactionId = readHlc(wire, 'TransactionId');
+
+  return {
+    type,
+    partitionId,
+    event:
+      type === 'event'
+        ? {
+            key: stringOf(wire['Key']),
+            kind: watchEventKindFromCode(wire['Kind'] as number),
+            value: readBytes(wire['Value']),
+            revision: numberOf(wire['Revision']),
+            expires: readHlc(wire, 'Expires'),
+            commitTimestamp: readHlc(wire, 'CommitTimestamp'),
+            transactionId,
+            partitionId,
+            origin: typeof wire['Origin'] === 'string' ? wire['Origin'] : null,
+          }
+        : null,
+    timestamp: type === 'progress' || type === 'lagged' ? readHlc(wire, 'Timestamp') : HLC_ZERO,
+    transactionId: type === 'transactionEnd' ? transactionId : HLC_ZERO,
+    lagReason: type === 'lagged' ? watchLagReasonFromCode(wire['LagReason'] as number) : 'none',
+    refusal: type === 'refused' ? keyValueResponseFromCode(wire['Refusal'] as number) : 'get',
+    partitions:
+      type === 'opened' ? asNumberArray(wire['Partitions']) : [],
+    routes:
+      type === 'refused'
+        ? asArray(wire['Routes']).map((route) => ({
+            partitionId: numberOf(route['PartitionId']),
+            hostedHere: route['HostedHere'] === true,
+            endpoints: Array.isArray(route['Endpoints'])
+              ? (route['Endpoints'] as unknown[]).filter((e): e is string => typeof e === 'string')
+              : [],
+          }))
+        : [],
+  };
+}
+
 // ── Parsing helpers ──────────────────────────────────────────────────────────
+
+function asNumberArray(value: unknown): number[] {
+  return Array.isArray(value) ? value.map(numberOf) : [];
+}
 
 function numberOf(value: unknown): number {
   return typeof value === 'number' ? value : Number(value ?? 0);

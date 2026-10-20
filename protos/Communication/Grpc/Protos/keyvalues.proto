@@ -45,6 +45,8 @@ service KeyValuer {
   rpc GetSnapshotFloor    (GrpcGetSnapshotFloorRequest)     returns (GrpcGetSnapshotFloorResponse);
   rpc GetPartitionApplyFingerprint (GrpcGetPartitionApplyFingerprintRequest) returns (GrpcGetPartitionApplyFingerprintResponse);
   rpc GetPreparedIntentPresence (GrpcGetPreparedIntentPresenceRequest) returns (GrpcGetPreparedIntentPresenceResponse);
+  rpc Watch (stream GrpcWatchRequest) returns (stream GrpcWatchResponse);
+  rpc HistoryHold (GrpcHistoryHoldRequest) returns (GrpcHistoryHoldResponse);
 }
 
 message GrpcTrySetKeyValueRequest {
@@ -308,6 +310,107 @@ message GrpcTryGetManyValuesResponse {
   repeated GrpcRouteHint Routes = 3;
 }
 
+// A batched probe forwarded to the node that leads the keys' partitions: many keys of one key space,
+// each read as a single get of it would be, optionally under a Shared [k,k] range lock taken in the
+// same actor turn. The receiver routes the keys again on arrival.
+message GrpcTryProbeManyRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  int32 ReadTimestampNode = 4;
+  int64 ReadTimestampPhysical = 5;
+  uint32 ReadTimestampCounter = 6;
+  repeated string Keys = 7;
+  GrpcKeyValueDurability Durability = 8;
+  GrpcProbeLockMode LockMode = 9;
+  int32 ExpiresMs = 10;
+}
+
+enum GrpcProbeLockMode {
+  GRPC_PROBE_LOCK_NONE = 0;
+  GRPC_PROBE_LOCK_SHARED = 1;
+  // Replay of a probe whose locks a completed operation recorded: renew a held lock over the same bounds, never take one.
+  GRPC_PROBE_LOCK_SHARED_REENTRY_ONLY = 2;
+}
+
+message GrpcTryProbeManyResponse {
+  optional string ServedFrom = 1;
+  // One item per requested key, in request order.
+  repeated GrpcTryProbeManyResponseItem Items = 2;
+  // The leaderships the probe's locks were granted under, one entry per partition and term.
+  repeated GrpcLockGrantTerm GrantTerms = 3;
+}
+
+message GrpcTryProbeManyResponseItem {
+  GrpcKeyValueResponseType Type = 1;
+  // True when the answer carried an entry; the fields below are meaningful only then.
+  bool HasEntry = 2;
+  optional bytes Value = 3;
+  int64 Revision = 4;
+  int32 ExpiresNode = 5;
+  int64 ExpiresPhysical = 6;
+  uint32 ExpiresCounter = 7;
+  int32 LastUsedNode = 8;
+  int64 LastUsedPhysical = 9;
+  uint32 LastUsedCounter = 10;
+  int32 LastModifiedNode = 11;
+  int64 LastModifiedPhysical = 12;
+  uint32 LastModifiedCounter = 13;
+  GrpcKeyValueState State = 14;
+  int32 HolderTransactionIdNode = 15;
+  int64 HolderTransactionIdPhysical = 16;
+  uint32 HolderTransactionIdCounter = 17;
+  // True when the key holds the transaction's Shared [k,k] lock after the probe.
+  bool Locked = 18;
+}
+
+// A batched range probe forwarded to the node that leads the seeks' partitions: many bounded seeks
+// under one prefix, each read as a single range page over its bounds and limit would be, optionally
+// under a Shared range lock over its bounds taken in the same actor turn. The receiver routes the
+// seeks again on arrival.
+message GrpcTryProbeManyRangesRequest {
+  int32 TransactionIdNode = 1;
+  int64 TransactionIdPhysical = 2;
+  uint32 TransactionIdCounter = 3;
+  int32 ReadTimestampNode = 4;
+  int64 ReadTimestampPhysical = 5;
+  uint32 ReadTimestampCounter = 6;
+  string Prefix = 7;
+  repeated GrpcProbeRange Seeks = 8;
+  GrpcKeyValueDurability Durability = 9;
+  GrpcProbeLockMode LockMode = 10;
+  int32 ExpiresMs = 11;
+}
+
+message GrpcProbeRange {
+  optional string StartKey = 1;
+  bool StartInclusive = 2;
+  optional string EndKey = 3;
+  bool EndInclusive = 4;
+  int32 Limit = 5;
+}
+
+message GrpcTryProbeManyRangesResponse {
+  optional string ServedFrom = 1;
+  // One item per requested seek, in request order.
+  repeated GrpcTryProbeManyRangesResponseItem Items = 2;
+  // The leaderships the probe's locks were granted under, one entry per partition and term.
+  repeated GrpcLockGrantTerm GrantTerms = 3;
+}
+
+message GrpcTryProbeManyRangesResponseItem {
+  GrpcKeyValueResponseType Type = 1;
+  repeated GrpcKeyValueByPrefixItemResponse Entries = 2;
+  bool HasMore = 3;
+  // The key the seek's remaining entries start after; set only when HasMore is.
+  optional string ResumeKey = 4;
+  int32 HolderTransactionIdNode = 5;
+  int64 HolderTransactionIdPhysical = 6;
+  uint32 HolderTransactionIdCounter = 7;
+  // True when the seek's bounds hold the transaction's Shared range lock after the probe.
+  bool Locked = 8;
+}
+
 message GrpcTryGetManyValuesResponseItem {
   GrpcKeyValueResponseType Type = 1;
   string Key = 2;
@@ -474,6 +577,9 @@ message GrpcTryCheckManyWriteIntentsRequestItem {
 message GrpcTryCheckManyWriteIntentsResponse {
   optional string ServedFrom = 1;
   repeated GrpcTryCheckManyWriteIntentsResponseItem Items = 2;
+  // The leadership terms under which the serving node confirmed the caller's own staged intents held
+  // (check 32), one per partition, so the caller's one-phase bundle can be fenced to that leadership.
+  repeated GrpcLockGrantTerm GrantTerms = 3;
 }
 
 message GrpcTryCheckManyWriteIntentsResponseItem {
@@ -836,11 +942,25 @@ message GrpcGetByRangeRequest {
   bool SnapshotAtLeader = 17;
 }
 
+// What one range-scan page cost the serving node. Advisory: it never changes paging or results.
+// Absent when the server predates it; a consumer must read an absent message as unknown, never as zero.
+message GrpcScanObservation {
+  int64 EntriesInspected = 1;
+  int64 DeadEntriesSkipped = 2;
+  int64 RevisionRowsExamined = 3;
+  int64 RevisionRunSeeks = 4;
+  int64 IntentsMerged = 5;
+  int64 PageRetries = 6;
+  bool ServedRemotely = 7;
+  bool DiskFallback = 8;
+}
+
 message GrpcGetByRangePageResponse {
   GrpcKeyValueResponseType Type = 1;
   repeated GrpcKeyValueByPrefixItemResponse Items = 2;
   optional string NextCursor = 3;
   bool HasMore = 4;
+  GrpcScanObservation Observation = 5;
 }
 
 message GrpcGetByRangeResponse {
@@ -849,6 +969,7 @@ message GrpcGetByRangeResponse {
   repeated GrpcKeyValueByPrefixItemResponse Items = 3;
   optional string NextCursor = 4;
   bool HasMore = 5;
+  GrpcScanObservation Observation = 6;
 }
 
 message GrpcScanAllByPrefixRequest {
@@ -883,6 +1004,9 @@ message GrpcStartTransactionRequest
   // Whether the session yields its point-key write intents to foreground writers. Convert with
   // TransactionConflictPolicyWire; unspecified and unknown values decode as Normal.
   GrpcTransactionConflictPolicy ConflictPolicy = 13;
+  // What produced the transaction's writes, carried on its prepared intents and watch events. Absent for an
+  // ordinary transaction.
+  optional string Origin = 14;
 }
 
 message GrpcStartTransactionResponse
@@ -953,6 +1077,15 @@ message GrpcCommitTransactionResponse
   optional string ServedFrom = 1;
   GrpcKeyValueResponseType Type = 2;
   optional string RecordAnchorKey = 3;
+  // Why the commit was refused (Kahuna's CommitRefusalClass), 0 when it was not refused or the answering node
+  // predates the field. Carried as an integer so a newer node can name a class an older one does not know.
+  int32 Refusal = 4;
+  optional string Reason = 5;
+  // On a commit: the transaction's commit timestamp, the one its writes and watch events carry. Zero when it
+  // committed no persistent key through the durable path, or the answering node predates the field.
+  int32  CommitTimestampNode = 6;
+  int64  CommitTimestampPhysical = 7;
+  uint32 CommitTimestampCounter = 8;
 }
 
 message GrpcRollbackTransactionResponse
@@ -981,6 +1114,8 @@ enum GrpcOperationKind {
   GRPC_OP_KIND_MANY_POINT_LOCK = 11;
   GRPC_OP_KIND_GET_MANY = 12;
   GRPC_OP_KIND_EXISTS_MANY = 13;
+  GRPC_OP_KIND_PROBE_MANY = 14;
+  GRPC_OP_KIND_PROBE_MANY_RANGES = 15;
 }
 
 enum GrpcOperationRegistrationOutcome {
@@ -1063,6 +1198,8 @@ message GrpcCompleteOperationRequest
   repeated GrpcTransactionModifiedKey AcquiredPointLocks = 24;
   // The leaderships the acquired locks of this operation were granted under.
   repeated GrpcLockGrantTerm LockGrantTerms = 25;
+  // The range locks a batch operation acquired (a batched probe's Shared [k,k] locks).
+  repeated GrpcTransactionRangeLock AcquiredRangeLocks = 26;
   GrpcKeyValueDurability Durability = 16;
   GrpcKeyValueResponseType CachedType = 17;
   int64 CachedRevision = 18;
@@ -1244,6 +1381,8 @@ message GrpcBatchServerKeyValueRequest {
     GrpcDurableBundleRequest DurableBundle = 55;
     GrpcDurableDecisionRequest DurableDecision = 56;
     GrpcDurableOnePhaseRequest DurableOnePhase = 57;
+    GrpcTryProbeManyRequest TryProbeMany = 59;
+    GrpcTryProbeManyRangesRequest TryProbeManyRanges = 60;
   }
   // Set only when Type is SERVER_COALESCED: independent single-operation envelopes that share
   // this one stream message. Each inner envelope carries its own RequestId, Type, ForwardHops
@@ -1310,6 +1449,8 @@ message GrpcBatchServerKeyValueResponse
     GrpcDurableBundleResponse DurableBundle = 54;
     GrpcDurableDecisionResponse DurableDecision = 55;
     GrpcDurableOnePhaseResponse DurableOnePhase = 56;
+    GrpcTryProbeManyResponse TryProbeMany = 58;
+    GrpcTryProbeManyRangesResponse TryProbeManyRanges = 59;
   }
   // Set only when Type is SERVER_COALESCED: independent single-operation responses that share
   // this one stream message.
@@ -1593,6 +1734,10 @@ message GrpcDurableOnePhaseRequest {
   int32 OpIdNode = 11;
   int64 OpIdPhysical = 12;
   uint32 OpIdCounter = 13;
+  // The Raft term the anchor partition must still be led under when the bundle is appended: the term the
+  // transaction's staged intents (and locks) on the partition were confirmed under at the commit probe. The
+  // receiver refuses the bundle before anything is appended when its term differs. 0 = no fence.
+  int64 ExpectedTerm = 14;
 }
 
 // The bundle signals (BatchCommitted / PrepareAcknowledged / PrepareRejection, as in GrpcDurableBundleResponse)
@@ -1704,6 +1849,8 @@ enum GrpcServerBatchType {
   // The envelope carries no payload of its own: the Coalesced field holds the real requests
   // (or responses).
   SERVER_COALESCED = 56;
+  SERVER_TRY_PROBE_MANY = 57;
+  SERVER_TRY_PROBE_MANY_RANGES = 58;
 }
 
 enum GrpcRangeLockMode {
@@ -1733,6 +1880,10 @@ enum GrpcKeyValueResponseType {
   TYPE_COMMITTED = 8;
   TYPE_ROLLEDBACK = 9;
   TYPE_EXISTS = 10;
+  // Lag, not a lock conflict: a replication intent in flight, a foreign durable intent whose decision is
+  // pending, or a holder already decided and still settling. Retry it; it clears on its own and a client may
+  // give it a longer budget than a deadlock wait.
+  TYPE_WAITING_FOR_REPLICATION = 11;
   TYPE_ERRORED = 99;
   TYPE_INVALID_INPUT = 100;
   TYPE_MUST_RETRY = 101;
@@ -1749,6 +1900,10 @@ enum GrpcKeyValueResponseType {
   // caller should back off first. Deliberately distinct from TYPE_MUST_RETRY, which is transient and
   // should be retried promptly.
   TYPE_ADMISSION_REFUSED = 108;
+  // A watch was asked for ephemeral keys. An ephemeral write never reaches Raft, so no replicated event
+  // exists to report. The refusal is permanent: a retry gets the same answer.
+  TYPE_WATCH_UNSUPPORTED_ON_EPHEMERAL = 109;
+  TYPE_HISTORY_HOLD_LIMIT_REACHED = 110;
 }
 
 enum GrpcKeyValueDurability {
@@ -1879,4 +2034,148 @@ message GrpcGetPreparedIntentPresenceResponse {
   GrpcKeyValueResponseType Type = 1;
   bool Held = 2;
   int64 AppliedLogId = 3;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Watch streams. One bidirectional call carries any number of watches, each named by a watch id the
+// client chooses. The client opens and cancels watches with requests; the server answers each open
+// with an OPENED or a REFUSED frame, then sends the watch's frames until a terminal frame (LAGGED,
+// HISTORY_UNAVAILABLE or REFUSED) or a cancel. Ending the request stream ends every watch on the call.
+// ---------------------------------------------------------------------------------------------
+
+enum GrpcWatchRequestType {
+  WATCH_REQUEST_OPEN = 0;
+  WATCH_REQUEST_CANCEL = 1;
+}
+
+enum GrpcWatchScopeKind {
+  WATCH_SCOPE_KEY = 0;
+  WATCH_SCOPE_PREFIX = 1;
+  WATCH_SCOPE_RANGE = 2;
+}
+
+message GrpcWatchRequest {
+  GrpcWatchRequestType Type = 1;
+  // Chosen by the client, unique among the open watches of the call. Zero is invalid.
+  int64 WatchId = 2;
+  GrpcWatchScopeKind ScopeKind = 3;
+  // The key, the prefix, or the key space of a range.
+  string ScopeValue = 4;
+  // The bounds of a range: StartKey inclusive, EndKey exclusive. Absent is unbounded; an empty
+  // string is a real bound.
+  optional string StartKey = 5;
+  optional string EndKey = 6;
+  GrpcKeyValueDurability Durability = 7;
+  bool KeysOnly = 8;
+  // Frames the server buffers for a slow reader before it ends the watch with LAGGED. Zero takes the
+  // node's default.
+  int32 Capacity = 9;
+  // Limits the watch to these partitions of the scope. Empty watches every partition the scope covers.
+  repeated int32 Partitions = 10;
+  // Replays every retained event above this timestamp before the live events, on every partition that
+  // ResumePartitions does not name. Zero is live only.
+  int32  ResumeFromNode = 11;
+  int64  ResumeFromPhysical = 12;
+  uint32 ResumeFromCounter = 13;
+  // A cursor per partition, overriding ResumeFrom for the partitions it names.
+  repeated GrpcWatchCursor ResumePartitions = 14;
+}
+
+message GrpcWatchCursor {
+  int32  PartitionId = 1;
+  int32  TimestampNode = 2;
+  int64  TimestampPhysical = 3;
+  uint32 TimestampCounter = 4;
+}
+
+enum GrpcWatchFrameType {
+  WATCH_FRAME_EVENT = 0;
+  WATCH_FRAME_PROGRESS = 1;
+  WATCH_FRAME_TRANSACTION_END = 2;
+  WATCH_FRAME_LAGGED = 3;
+  WATCH_FRAME_HISTORY_UNAVAILABLE = 4;
+  WATCH_FRAME_REFUSED = 5;
+  WATCH_FRAME_OPENED = 6;
+}
+
+enum GrpcWatchEventKind {
+  WATCH_EVENT_SET = 0;
+  WATCH_EVENT_DELETED = 1;
+  WATCH_EVENT_EXTENDED = 2;
+}
+
+// The replicas of one partition a refused watch covers, so the client can open it where it is hosted.
+message GrpcWatchRoute {
+  int32 PartitionId = 1;
+  bool HostedHere = 2;
+  // Advertised client endpoints, the believed leader first.
+  repeated string Endpoints = 3;
+}
+
+message GrpcWatchFrame {
+  int64 WatchId = 1;
+  GrpcWatchFrameType Type = 2;
+  // The partition the frame is about, or -1 for the whole watch.
+  int32 PartitionId = 3;
+  string Key = 4;
+  GrpcWatchEventKind Kind = 5;
+  // Absent for a delete, an extend and a keys-only watch; present and empty for a zero-byte value.
+  optional bytes Value = 6;
+  int64 Revision = 7;
+  int32 ExpiresNode = 8;
+  int64 ExpiresPhysical = 9;
+  uint32 ExpiresCounter = 10;
+  int32 CommitTimestampNode = 11;
+  int64 CommitTimestampPhysical = 12;
+  uint32 CommitTimestampCounter = 13;
+  int32 TransactionIdNode = 14;
+  int64 TransactionIdPhysical = 15;
+  uint32 TransactionIdCounter = 16;
+  int32 TimestampNode = 17;
+  int64 TimestampPhysical = 18;
+  uint32 TimestampCounter = 19;
+  // Mirrors Kahuna.Shared.KeyValue.KeyValueWatchLagReason.
+  int32 LagReason = 20;
+  GrpcKeyValueResponseType Refusal = 21;
+  // OPENED: the partitions the watch is registered on.
+  repeated int32 Partitions = 22;
+  // REFUSED with TYPE_DOES_NOT_EXIST: where each partition of the scope is hosted.
+  repeated GrpcWatchRoute Routes = 23;
+  // EVENT: what produced the transaction that wrote the key; absent for an ordinary write.
+  optional string Origin = 24;
+}
+
+// Several frames per message, so a busy watch does not pay one HTTP/2 write per event.
+message GrpcWatchResponse {
+  repeated GrpcWatchFrame Frames = 1;
+}
+
+// One registered history hold: the WAL of one data partition stays retained on every replica from the timestamp on.
+message GrpcHistoryHoldInfo {
+  string HoldId = 1;
+  string HolderId = 2;
+  int32  PartitionId = 3;
+  int32  TimestampNode = 4;
+  int64  TimestampPhysical = 5;
+  uint32 TimestampCounter = 6;
+  int32  LeaseExpiryNode = 7;
+  int64  LeaseExpiryPhysical = 8;
+  uint32 LeaseExpiryCounter = 9;
+}
+
+// A request to the history hold registry. Operation: 0 acquire, 1 renew, 2 release, 3 list.
+message GrpcHistoryHoldRequest {
+  int32 Operation = 1;
+  optional string HolderId = 2;     // acquire: the holder; list: limits the list to it
+  repeated int32 Partitions = 3;    // acquire: one hold per partition
+  int32  TimestampNode = 4;         // acquire: hold from here; renew: move forward to here (zero keeps)
+  int64  TimestampPhysical = 5;
+  uint32 TimestampCounter = 6;
+  int32  LeaseMs = 7;               // acquire, renew
+  repeated string HoldIds = 8;      // renew, release
+}
+
+message GrpcHistoryHoldResponse {
+  GrpcKeyValueResponseType Type = 1;
+  repeated GrpcHistoryHoldInfo Holds = 2;
 }

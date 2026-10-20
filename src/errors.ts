@@ -1,4 +1,5 @@
 import type {
+  CommitRefusalClass,
   ErrorDomain,
   KeyValueResponseCode,
   LockResponseCode,
@@ -53,6 +54,20 @@ export class KahunaError extends Error {
 
 export function isKahunaError(value: unknown): value is KahunaError {
   return value instanceof KahunaError;
+}
+
+/**
+ * The error a refused commit raises. The message names the arm that refused it,
+ * beside the outcome, so a caller can tell a conflict from a lost lock or a
+ * deadline without reading server logs.
+ */
+export function commitRefusalError(
+  code: KeyValueResponseCode,
+  refusal: CommitRefusalClass,
+  reason: string | null,
+): KahunaError {
+  const detail = refusal === 'none' ? '' : ` (${refusal}: ${reason ?? 'no reason given'})`;
+  return KahunaError.keyValue(`Failed to commit key/value transaction: ${code}${detail}`, code);
 }
 
 /** True when the error is a key/value failure carrying exactly this code. */

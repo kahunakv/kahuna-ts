@@ -1,7 +1,7 @@
 {
   "name": "kahuna-client",
-  "version": "0.3.0",
-  "description": "TypeScript client for Kahuna: distributed locks, key/value store and sequencer",
+  "version": "0.6.0",
+  "description": "TypeScript client for Kahuna: distributed locks, key/value store, sequencer and rate limiters",
   "license": "MIT",
   "author": "Andres Gutierrez",
   "repository": {
@@ -17,6 +17,7 @@
     "consensus",
     "leader-election",
     "sequencer",
+    "rate-limiting",
     "kahuna"
   ],
   "type": "module",
@@ -29,6 +30,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./middleware": {
+      "types": "./dist/middleware.d.ts",
+      "import": "./dist/middleware.js"
     }
   },
   "files": [

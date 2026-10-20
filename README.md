@@ -263,6 +263,62 @@ conflict with each other exactly as two normal ones do.
 A yielding session may not hold prefix or range locks; the server refuses those
 acquires. The option applies to sessions only: a script transaction cannot use it.
 
+### Commit timestamp and origin
+
+`commitWithTimestamp` commits like `commit` and also returns the commit timestamp.
+Every write of the transaction carries that timestamp, and its watch events report
+it. The timestamp is `HLC_ZERO` when the commit wrote no persistent key.
+
+```ts
+await using session = await client.beginTransaction({ origin: 'nightly-cleanup' });
+await session.delete('orders/42');
+const { committed, commitTimestamp } = await session.commitWithTimestamp();
+```
+
+`origin` is a label of up to 64 characters. Every watch event of the transaction
+carries it, so a change-feed consumer can tell maintenance writes from user writes.
+The server keeps it only when it runs with `--transaction-origin-tags`.
+
+A refused commit raises a `KahunaError` whose message names the refusal class, such
+as `lostLock` or `decisionDeadline`, and the server's reason.
+
+## Watches
+
+A watch sends a frame for every committed mutation of the keys in its scope. The
+scope is one key (`watchKey`), a prefix (`watchPrefix`), or a half-open interval of
+one key space (`watchRange`). A watch needs persistent keys.
+
+```ts
+import { watchPrefix } from 'kahuna-client';
+
+await using watch = await client.watchKeyValues({ scope: watchPrefix('orders/') });
+
+for await (const frame of watch) {
+  if (frame.type === 'event') console.log(frame.event!.kind, frame.event!.key);
+}
+```
+
+When `watchKeyValues` returns, the watch is registered on every partition of its
+scope. Delivery is at-least-once: drop an event whose revision is at or below the
+last revision you hold for that key. The watch ends with one terminal frame:
+`lagged`, `historyUnavailable` or `refused`. Events between the last delivered one
+and the end can be missing.
+
+When the server runs with `--commit-admission-lag-ms`, each partition sends
+`progress` frames, and `watch.watermarks` holds the last watermark of each
+partition. To replay what you missed, open a new watch with
+`resumePartitions: watch.watermarks`. With `autoResume: true`, the client does this
+for you when a node stream loses continuity.
+
+A history hold keeps the log of a partition from a timestamp on, so a later resume
+is likely to find it:
+
+```ts
+const { holds } = await client.acquireHistoryHolds('feed-1', watch.partitions, cursor, 60_000);
+await client.renewHistoryHolds(holds.map((h) => h.holdId), 60_000, { timestamp: newCursor });
+await client.releaseHistoryHolds(holds.map((h) => h.holdId));
+```
+
 ## Sequences
 
 ```ts
@@ -499,6 +555,11 @@ Docker:
 ```bash
 KAHUNA_TEST_ENDPOINTS=https://localhost:8082 npm test
 ```
+
+Two watch tests need progress watermarks. They run only when
+`KAHUNA_TEST_COMMIT_ADMISSION=1` and the nodes run with `--commit-admission-lag-ms`.
+The origin test expects the label only when `KAHUNA_TEST_ORIGIN_TAGS=1` and the
+nodes run with `--transaction-origin-tags`. Otherwise it expects no label.
 
 Two suites need no cluster at all: `test/value-parsing.test.ts` and
 `test/placement-hash.test.ts`. The second pins the placement hash against vectors

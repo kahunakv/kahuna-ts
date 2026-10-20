@@ -21,6 +21,7 @@ export type {
   RangeOptions,
   ReadOptions,
   SetOptions,
+  WatchOptions,
   WriteOptions,
 } from './client.js';
 
@@ -29,6 +30,14 @@ export { KeyValueEntry } from './entry.js';
 export { TransactionScript } from './transaction-script.js';
 export type { ScriptRunOptions } from './transaction-script.js';
 export { TransactionSession } from './transaction-session.js';
+export {
+  KahunaWatch,
+  isTerminalWatchFrame,
+  watchKey,
+  watchPrefix,
+  watchRange,
+  watchScopeMatches,
+} from './watch.js';
 export type {
   SessionCallOptions,
   SessionRangeOptions,
@@ -56,9 +65,11 @@ export {
 } from './hlc.js';
 
 export type {
+  CommitRefusalClass,
   DecisionDurability,
   Durability,
   ErrorDomain,
+  HistoryHoldOperation,
   KeyValueResponseCode,
   LockResponseCode,
   RangeLockMode,
@@ -71,6 +82,10 @@ export type {
   TransactionConflictPolicy,
   TransactionLocking,
   TransactionPriority,
+  WatchEventKind,
+  WatchFrameType,
+  WatchLagReason,
+  WatchScopeKind,
 } from './enums.js';
 
 export type { KahunaClientOptions, SecurityOptions } from './options.js';
@@ -87,6 +102,9 @@ export type {
   DeleteManyItem,
   ExtendOutcome,
   GetManyItem,
+  HistoryHoldAnswer,
+  HistoryHoldInfo,
+  HistoryHoldRequest,
   KeySpaceRanges,
   LockAcquireResult,
   LockInfo,
@@ -116,6 +134,11 @@ export type {
   SplitRangeResult,
   TransactionOptions,
   ValueInput,
+  WatchEvent,
+  WatchFrame,
+  WatchRequest,
+  WatchRoute,
+  WatchScope,
 } from './types.js';
 
 export {
@@ -145,7 +168,12 @@ export type {
 
 export { GrpcTransport } from './transport/grpc.js';
 export { RestTransport } from './transport/rest.js';
-export type { CallOptions, Transport } from './transport/transport.js';
+export type {
+  CallOptions,
+  Transport,
+  WatchOpening,
+  WatchStream,
+} from './transport/transport.js';
 
 export { newLockOwner } from './transport/codec.js';
 

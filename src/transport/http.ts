@@ -19,6 +19,13 @@ export interface HttpRequestOptions {
   readonly signal?: AbortSignal;
 }
 
+/** A response whose body is read as it arrives, for a stream that stays open. */
+export interface HttpStreamResponse {
+  readonly status: number;
+  readonly headers: Record<string, string | string[] | undefined>;
+  readonly body: Dispatcher.ResponseData['body'];
+}
+
 /**
  * Raised when a node answers with a status the client cannot use.
  *
@@ -82,6 +89,32 @@ export class HttpClient {
 
     const body = await response.body.text();
     return { status: response.statusCode, headers: response.headers, body };
+  }
+
+  /**
+   * Sends a request whose response stays open, such as a server-sent-events stream.
+   *
+   * The body has no idle timeout, because a quiet stream sends nothing for as long
+   * as nothing happens. The signal stays attached to the body: aborting it closes
+   * the stream.
+   */
+  async openStream(options: HttpRequestOptions & { accept: string }): Promise<HttpStreamResponse> {
+    const headers: Record<string, string> = {
+      accept: options.accept,
+      authorization: `Bearer ${options.bearerToken}`,
+    };
+    if (options.body !== undefined) headers['content-type'] = 'application/json';
+
+    const response = await request(options.url, {
+      method: options.method,
+      headers,
+      body: options.body !== undefined ? Buffer.from(options.body) : undefined,
+      dispatcher: this.agent as Dispatcher,
+      signal: options.signal,
+      bodyTimeout: 0,
+    });
+
+    return { status: response.statusCode, headers: response.headers, body: response.body };
   }
 }
 
