@@ -1,5 +1,6 @@
 import type {
   Durability,
+  KeyValueReadMode,
   KeyValueResponseCode,
   RangeLockMode,
   TransactionPriority,
@@ -65,6 +66,12 @@ export interface TransactionalCallOptions extends CallOptions {
 /** A read that may run inside a transaction session and at a snapshot. */
 export interface ReadCallOptions extends TransactionalCallOptions {
   readonly readTimestamp?: HlcTimestamp;
+  /**
+   * How a read at `readTimestamp` treats the transaction's own state. The point read,
+   * the range page and the range scan send it. A node that does not know the field
+   * serves the default read.
+   */
+  readonly readMode?: KeyValueReadMode;
 }
 
 /** Receives the routing hints a transport reads off responses. */

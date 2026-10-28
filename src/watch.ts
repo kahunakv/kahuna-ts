@@ -4,7 +4,7 @@ import { HLC_ZERO, compareHlc, type HlcTimestamp } from './hlc.js';
 import type { RoutingEndpointPolicy } from './routing/endpoint-policy.js';
 import { delay } from './transport/retry.js';
 import type { Transport, WatchOpening, WatchStream } from './transport/transport.js';
-import type { WatchFrame, WatchRequest, WatchRoute, WatchScope } from './types.js';
+import type { WatchEvent, WatchFrame, WatchRequest, WatchRoute, WatchScope } from './types.js';
 
 // ── Scopes ───────────────────────────────────────────────────────────────────
 
@@ -73,6 +73,20 @@ function compareOrdinal(left: string, right: string): number {
 /** True when the frame ends the stream. */
 export function isTerminalWatchFrame(frame: WatchFrame): boolean {
   return frame.type === 'lagged' || frame.type === 'historyUnavailable' || frame.type === 'refused';
+}
+
+/**
+ * True when the event is a later mutation of its key than `last`, the last event the
+ * consumer applied for the same key. Null `last` means the consumer holds none.
+ *
+ * Events are ordered by commit timestamp, then by revision. A repeat of an event
+ * already applied compares equal and is not later. The revision alone does not
+ * identify a mutation: an extend keeps it, and so does a set with no revision.
+ */
+export function watchEventSupersedes(event: WatchEvent, last: WatchEvent | null): boolean {
+  if (last === null) return true;
+  const byTime = compareHlc(event.commitTimestamp, last.commitTimestamp);
+  return byTime > 0 || (byTime === 0 && event.revision > last.revision);
 }
 
 /** @internal */
@@ -171,9 +185,11 @@ export type WatchResumer = (
  * the serving replica applied it.
  *
  * **Delivery.** Delivery is at-least-once. For one key, the first delivery of each
- * revision arrives in revision order, but a repeat of an older revision can arrive
- * later. A consumer drops an event whose revision is at or below the last revision
- * it holds for that key. Across keys no order is promised.
+ * mutation arrives in commit order, but a repeat of an older one can arrive later.
+ * A consumer keeps the last event it applied for each key. It drops an event that
+ * {@link watchEventSupersedes} does not report as later than that one. The revision
+ * alone is not sufficient, because an `extended` event keeps the revision. Across
+ * keys no order is promised.
  *
  * **Endings.** The stream ends with one terminal frame and nothing after it:
  * `lagged` when continuity is lost, `historyUnavailable` when a resume cannot be
@@ -185,13 +201,16 @@ export type WatchResumer = (
  * **Fan-out.** When no single node hosts every partition of the scope, the watch
  * runs on several nodes. A terminal frame from any of them ends the whole watch.
  *
- * **Resume.** The watch keeps the last progress watermark of each partition. With
- * automatic resume on, a node stream that ends with `lagged` (an overflow, a dropped
- * connection, a shutdown, a replaced partition state, a failed apply) is reopened
- * from those watermarks, and the node replays what was missed. The consumer sees no
- * `lagged` frame, but can see events again. A stream is resumed only when every one
- * of its partitions has a watermark. A `historyUnavailable` frame, a refusal, a
- * range-map change and a watermark violation are never hidden: they end the watch.
+ * **Resume.** The watch keeps the last progress watermark of each partition that
+ * the reader took (`watermarks`). Every event below it went to the reader before
+ * it. A consumer stores it together with the state it built from those events, and
+ * opens a later watch from it. With automatic resume on, a node stream that ends
+ * with `lagged` (an overflow, a dropped connection, a shutdown, a replaced
+ * partition state, a failed apply) is reopened, and the node replays what was
+ * missed. The consumer sees no `lagged` frame, but can see events again. A stream
+ * is resumed only when every one of its partitions has a watermark. A
+ * `historyUnavailable` frame, a refusal, a range-map change and a watermark
+ * violation are never hidden: they end the watch.
  */
 export class KahunaWatch implements AsyncIterable<WatchFrame>, AsyncDisposable {
   readonly #queue = new FrameQueue(MERGE_CAPACITY);
@@ -202,7 +221,15 @@ export class KahunaWatch implements AsyncIterable<WatchFrame>, AsyncDisposable {
 
   readonly #resumer: WatchResumer | null;
 
+  /** The last watermark the reader took per partition: the public checkpoint. */
   readonly #watermarks = new Map<number, HlcTimestamp>();
+
+  /**
+   * The last watermark a node stream delivered per partition, ahead of what the
+   * reader took. The automatic resume reopens from it, because the frames between
+   * the two are still in the merge buffer and survive the resume.
+   */
+  readonly #received = new Map<number, HlcTimestamp>();
 
   #terminal: WatchFrame | null = null;
 
@@ -231,10 +258,12 @@ export class KahunaWatch implements AsyncIterable<WatchFrame>, AsyncDisposable {
   }
 
   /**
-   * The last progress watermark received for each partition: no event at or below
-   * it arrives later on that partition. It is the resume cursor of the partition.
-   * Empty while the nodes send no progress, which is when the commit admission window
-   * is off.
+   * The last progress watermark the reader took for each partition. No event at or
+   * below it arrives later on that partition, and every earlier event went to the
+   * reader first. It is the resume cursor of the partition, once the consumer
+   * processed what it read. It is empty until the reader takes a progress frame, and
+   * while the nodes send no progress, which is when the commit admission window is
+   * off.
    */
   get watermarks(): ReadonlyMap<number, HlcTimestamp> {
     return new Map(this.#watermarks);
@@ -249,6 +278,9 @@ export class KahunaWatch implements AsyncIterable<WatchFrame>, AsyncDisposable {
     for (;;) {
       const frame = await this.#queue.pull(signal);
       if (frame === null) break;
+
+      // Advanced here, not when the frame arrived: the frames before it went to the reader already.
+      if (frame.type === 'progress') advance(this.#watermarks, frame);
       yield frame;
     }
 
@@ -286,12 +318,7 @@ export class KahunaWatch implements AsyncIterable<WatchFrame>, AsyncDisposable {
 
           consecutiveResumes = 0;
 
-          if (frame.type === 'progress') {
-            const known = this.#watermarks.get(frame.partitionId);
-            if (known === undefined || compareHlc(frame.timestamp, known) > 0) {
-              this.#watermarks.set(frame.partitionId, frame.timestamp);
-            }
-          }
+          if (frame.type === 'progress') advance(this.#received, frame);
 
           if (!(await this.#queue.push(frame))) return;
         }
@@ -337,7 +364,7 @@ export class KahunaWatch implements AsyncIterable<WatchFrame>, AsyncDisposable {
 
     const cursors = new Map<number, HlcTimestamp>();
     for (const partitionId of partitions) {
-      const cursor = this.#watermarks.get(partitionId);
+      const cursor = this.#received.get(partitionId);
       if (cursor === undefined) return null;
       cursors.set(partitionId, cursor);
     }
@@ -353,6 +380,13 @@ export class KahunaWatch implements AsyncIterable<WatchFrame>, AsyncDisposable {
     this.#terminal = frame;
     this.#stop.abort();
     this.#queue.close();
+  }
+}
+
+function advance(cursors: Map<number, HlcTimestamp>, progress: WatchFrame): void {
+  const known = cursors.get(progress.partitionId);
+  if (known === undefined || compareHlc(progress.timestamp, known) > 0) {
+    cursors.set(progress.partitionId, progress.timestamp);
   }
 }
 

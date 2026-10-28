@@ -493,7 +493,8 @@ export interface WatchScope {
  * To resume, give `resumeFrom` or `resumePartitions`: the node replays every
  * retained event above the cursor before the live events. The cursor is the last
  * progress watermark the consumer received for the partition, not the timestamp of
- * its last event. A resume needs the commit admission window on every node.
+ * its last event. The node delivers no event and no watermark at or below the cursor
+ * on that partition. A resume needs the commit admission window on every node.
  */
 export interface WatchRequest {
   readonly scope: WatchScope;
@@ -514,10 +515,13 @@ export interface WatchRequest {
 /**
  * One committed mutation of a key, as a watch reports it.
  *
- * Delivery is at-least-once. For one key, the first delivery of each revision
- * arrives in revision order, but a repeat of an older revision can arrive later. A
- * consumer drops an event whose revision is at or below the last revision it holds
- * for that key.
+ * Delivery is at-least-once. For one key, the first delivery of each mutation
+ * arrives in commit order: each mutation of a key has a later commit timestamp than
+ * the one before it, an extend included. A repeat of an older mutation can arrive
+ * later, for example after a resume. A consumer keeps the last event it applied for
+ * each key, and drops an event that `watchEventSupersedes` does not report as later.
+ * The revision alone does not identify a mutation: an extend keeps it, and so does a
+ * set with no revision.
  */
 export interface WatchEvent {
   readonly key: string;

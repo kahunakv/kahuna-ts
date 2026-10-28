@@ -4,7 +4,9 @@ import {
   HLC_ZERO,
   KahunaError,
   compareHlc,
+  hlc,
   isHlcZero,
+  watchEventSupersedes,
   watchKey,
   watchPrefix,
   watchRange,
@@ -85,6 +87,34 @@ describe('watch scopes', () => {
   it('refuses a range whose start is not below its end', () => {
     expect(() => watchRange('t:r', 'b', 'a')).toThrow(RangeError);
     expect(() => watchKey('')).toThrow(TypeError);
+  });
+});
+
+describe('watch event order', () => {
+  function event(revision: number, physical: number, kind: WatchEvent['kind'] = 'set'): WatchEvent {
+    return {
+      key: 'k',
+      kind,
+      value: null,
+      revision,
+      expires: HLC_ZERO,
+      commitTimestamp: hlc(1, physical, 0),
+      transactionId: HLC_ZERO,
+      partitionId: 0,
+      origin: null,
+    };
+  }
+
+  it('orders by commit timestamp, then by revision', () => {
+    expect(watchEventSupersedes(event(1, 10), null)).toBe(true);
+    expect(watchEventSupersedes(event(2, 20), event(1, 10))).toBe(true);
+    expect(watchEventSupersedes(event(2, 10), event(1, 10))).toBe(true);
+    expect(watchEventSupersedes(event(1, 10), event(2, 20))).toBe(false);
+  });
+
+  it('drops a repeat and keeps an extend that holds the revision', () => {
+    expect(watchEventSupersedes(event(3, 30), event(3, 30))).toBe(false);
+    expect(watchEventSupersedes(event(3, 40, 'extended'), event(3, 30))).toBe(true);
   });
 });
 

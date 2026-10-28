@@ -33,6 +33,7 @@ export { TransactionSession } from './transaction-session.js';
 export {
   KahunaWatch,
   isTerminalWatchFrame,
+  watchEventSupersedes,
   watchKey,
   watchPrefix,
   watchRange,
@@ -70,6 +71,7 @@ export type {
   Durability,
   ErrorDomain,
   HistoryHoldOperation,
+  KeyValueReadMode,
   KeyValueResponseCode,
   LockResponseCode,
   RangeLockMode,

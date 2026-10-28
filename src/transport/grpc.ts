@@ -11,6 +11,7 @@ import {
   TRANSACTION_CONFLICT_POLICY_CODES,
   TRANSACTION_PRIORITY_CODES,
   HISTORY_HOLD_OPERATION_CODES,
+  KEY_VALUE_READ_MODE_CODES,
   WATCH_SCOPE_KIND_CODES,
   commitRefusalFromCode,
   durabilityFromCode,
@@ -483,6 +484,7 @@ export class GrpcTransport implements Transport {
       Revision: revision,
       Durability: DURABILITY_CODES[durability],
       ...hlcFields('ReadTimestamp', options?.readTimestamp),
+      ReadMode: KEY_VALUE_READ_MODE_CODES[options?.readMode ?? 'default'],
     };
 
     const client = this.services(url).keyValuer;
@@ -812,6 +814,7 @@ export class GrpcTransport implements Transport {
         Limit: limit,
         ...hlcFields('ReadTimestamp', options?.readTimestamp),
         Durability: DURABILITY_CODES[durability],
+        ReadMode: KEY_VALUE_READ_MODE_CODES[options?.readMode ?? 'default'],
       },
       options?.signal,
     );
@@ -841,6 +844,7 @@ export class GrpcTransport implements Transport {
       Limit: pageSize,
       ...hlcFields('ReadTimestamp', options?.readTimestamp),
       Durability: DURABILITY_CODES[durability],
+      ReadMode: KEY_VALUE_READ_MODE_CODES[options?.readMode ?? 'default'],
     };
 
     const stream = invokeServerStream<Message>(

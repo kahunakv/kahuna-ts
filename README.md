@@ -299,16 +299,38 @@ for await (const frame of watch) {
 ```
 
 When `watchKeyValues` returns, the watch is registered on every partition of its
-scope. Delivery is at-least-once: drop an event whose revision is at or below the
-last revision you hold for that key. The watch ends with one terminal frame:
-`lagged`, `historyUnavailable` or `refused`. Events between the last delivered one
-and the end can be missing.
+scope. Delivery is at-least-once: an event can arrive again. Keep the last event
+you applied for each key, and drop an event that is not later than it:
+
+```ts
+import { watchEventSupersedes, type WatchEvent } from 'kahuna-client';
+
+const applied = new Map<string, WatchEvent>();
+
+for await (const frame of watch) {
+  const event = frame.event;
+  if (frame.type !== 'event' || !event) continue;
+  if (!watchEventSupersedes(event, applied.get(event.key) ?? null)) continue;
+  applied.set(event.key, event);
+  // apply the event
+}
+```
+
+Do not compare revisions only: an `extended` event refreshes the expiry and keeps
+the revision. The watch ends with one terminal frame: `lagged`,
+`historyUnavailable` or `refused`. Events between the last delivered one and the
+end can be missing.
 
 When the server runs with `--commit-admission-lag-ms`, each partition sends
-`progress` frames, and `watch.watermarks` holds the last watermark of each
-partition. To replay what you missed, open a new watch with
-`resumePartitions: watch.watermarks`. With `autoResume: true`, the client does this
-for you when a node stream loses continuity.
+`progress` frames. `watch.watermarks` holds the last watermark of each partition
+that your loop took from the watch. Every event below it came to your loop first.
+Store it together with the state you built from those events. To replay what you
+missed, open a new watch with `resumePartitions` set to the stored watermarks. With
+`autoResume: true`, the client does this for you when a node stream loses
+continuity.
+
+A node limits how many watches it keeps open. A watch over the limit is refused
+with `watchLimitReached`.
 
 A history hold keeps the log of a partition from a timestamp on, so a later resume
 is likely to find it:

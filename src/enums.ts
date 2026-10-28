@@ -49,7 +49,8 @@ export type KeyValueResponseCode =
   | 'safeTimestamp'
   | 'admissionRefused'
   | 'watchUnsupportedOnEphemeral'
-  | 'historyHoldLimitReached';
+  | 'historyHoldLimitReached'
+  | 'watchLimitReached';
 
 /** Outcome code of a sequence operation. */
 export type SequenceResponseCode =
@@ -150,7 +151,28 @@ export type CommitRefusalClass =
   /** The coordinator does not know the transaction. */
   | 'unknownTransaction'
   /** Retryable: the commit timestamp fell outside the commit admission window. */
-  | 'commitTimestampOutsideWindow';
+  | 'commitTimestampOutsideWindow'
+  /**
+   * Retryable after a short back-off: a written key, or the record anchor, is in a
+   * key range that a split or a merge is moving to another partition.
+   */
+  | 'rangeQuiesced';
+
+/**
+ * How a read at a read timestamp treats the state of the reading transaction.
+ *
+ * `default` is the read every caller had before the mode existed. Without a read
+ * timestamp, a transactional read pins the committed state it observes and serves
+ * that pin on every later read of the key. With a read timestamp, the read serves
+ * the committed state at that timestamp and does not show the transaction's own
+ * staged writes.
+ *
+ * `statementSnapshot` reads at one timestamp per statement. The transaction's own
+ * staged writes are visible, and every other key answers with the committed state
+ * at the timestamp. The read neither serves nor checks the pins of earlier reads,
+ * and it leaves no pin. It needs a read timestamp.
+ */
+export type KeyValueReadMode = 'default' | 'statementSnapshot';
 
 /** What a key/value watch covers. */
 export type WatchScopeKind =
@@ -261,6 +283,7 @@ export const KEY_VALUE_RESPONSE_CODES: Readonly<Record<KeyValueResponseCode, num
   admissionRefused: 108,
   watchUnsupportedOnEphemeral: 109,
   historyHoldLimitReached: 110,
+  watchLimitReached: 111,
 };
 
 export const SEQUENCE_RESPONSE_CODES: Readonly<Record<SequenceResponseCode, number>> = {
@@ -350,6 +373,12 @@ export const COMMIT_REFUSAL_CLASS_CODES: Readonly<Record<CommitRefusalClass, num
   admissionCapacity: 14,
   unknownTransaction: 15,
   commitTimestampOutsideWindow: 16,
+  rangeQuiesced: 17,
+};
+
+export const KEY_VALUE_READ_MODE_CODES: Readonly<Record<KeyValueReadMode, number>> = {
+  default: 0,
+  statementSnapshot: 1,
 };
 
 export const WATCH_SCOPE_KIND_CODES: Readonly<Record<WatchScopeKind, number>> = {

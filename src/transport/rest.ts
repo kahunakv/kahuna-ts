@@ -9,6 +9,7 @@ import {
   TRANSACTION_CONFLICT_POLICY_CODES,
   TRANSACTION_PRIORITY_CODES,
   HISTORY_HOLD_OPERATION_CODES,
+  KEY_VALUE_READ_MODE_CODES,
   WATCH_SCOPE_KIND_CODES,
   commitRefusalFromCode,
   durabilityFromCode,
@@ -525,6 +526,7 @@ export class RestTransport implements Transport {
       key,
       revision,
       readTimestamp: hlcToJson(options?.readTimestamp),
+      readMode: KEY_VALUE_READ_MODE_CODES[options?.readMode ?? 'default'],
       durability: DURABILITY_CODES[durability],
     };
 
@@ -856,6 +858,7 @@ export class RestTransport implements Transport {
         ...rangeFields(bounds),
         limit,
         readTimestamp: hlcToJson(options?.readTimestamp),
+        readMode: KEY_VALUE_READ_MODE_CODES[options?.readMode ?? 'default'],
         durability: DURABILITY_CODES[durability],
         cursor: options?.cursor ?? null,
       },

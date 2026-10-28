@@ -228,6 +228,9 @@ message GrpcTryGetKeyValueRequest {
   string CoordinatorKey = 10;
   uint64 OperationIdHigh = 11;
   uint64 OperationIdLow = 12;
+  // How the read treats the transaction's own state at ReadTimestamp. An older receiver ignores it and
+  // serves the default shape.
+  GrpcKeyValueReadMode ReadMode = 13;
 }
 
 message GrpcTryGetKeyValueResponse {
@@ -324,6 +327,9 @@ message GrpcTryProbeManyRequest {
   GrpcKeyValueDurability Durability = 8;
   GrpcProbeLockMode LockMode = 9;
   int32 ExpiresMs = 10;
+  // How each key's read treats the transaction's own state at the read timestamp. An older receiver
+  // ignores it and serves the default shape.
+  GrpcKeyValueReadMode ReadMode = 11;
 }
 
 enum GrpcProbeLockMode {
@@ -331,6 +337,15 @@ enum GrpcProbeLockMode {
   GRPC_PROBE_LOCK_SHARED = 1;
   // Replay of a probe whose locks a completed operation recorded: renew a held lock over the same bounds, never take one.
   GRPC_PROBE_LOCK_SHARED_REENTRY_ONLY = 2;
+}
+
+// How a read at a timestamp treats the reading transaction's own state. Mirrors KeyValueReadMode.
+enum GrpcKeyValueReadMode {
+  // Latest read or as-of read as before: a latest read pins what it observes, an as-of read shows no own write.
+  GRPC_READ_MODE_DEFAULT = 0;
+  // One timestamp per statement: own staged writes visible, every other key at the timestamp, earlier read
+  // observations neither served, checked nor created. Requires a read timestamp.
+  GRPC_READ_MODE_STATEMENT_SNAPSHOT = 1;
 }
 
 message GrpcTryProbeManyResponse {
@@ -380,6 +395,9 @@ message GrpcTryProbeManyRangesRequest {
   GrpcKeyValueDurability Durability = 9;
   GrpcProbeLockMode LockMode = 10;
   int32 ExpiresMs = 11;
+  // How each seek treats the transaction's own state at the read timestamp. An older receiver ignores it
+  // and serves the default shape.
+  GrpcKeyValueReadMode ReadMode = 12;
 }
 
 message GrpcProbeRange {
@@ -940,6 +958,9 @@ message GrpcGetByRangeRequest {
   // Mint the page's read snapshot on the serving leader instead of using ReadTimestamp.
   // Internal to inter-node forwarding; clients leave it unset.
   bool SnapshotAtLeader = 17;
+  // How the page treats the transaction's own state at ReadTimestamp. An older receiver ignores it and
+  // serves the default shape.
+  GrpcKeyValueReadMode ReadMode = 18;
 }
 
 // What one range-scan page cost the serving node. Advisory: it never changes paging or results.
@@ -1007,6 +1028,8 @@ message GrpcStartTransactionRequest
   // What produced the transaction's writes, carried on its prepared intents and watch events. Absent for an
   // ordinary transaction.
   optional string Origin = 14;
+  // The data partition whose leader hosts the session. Absent keeps the hash rule on CoordinatorKey.
+  optional int32 CoordinatorPartitionId = 15;
 }
 
 message GrpcStartTransactionResponse
@@ -1016,6 +1039,9 @@ message GrpcStartTransactionResponse
   int32 TransactionIdNode = 3;
   int64 TransactionIdPhysical = 4;
   uint32 TransactionIdCounter = 5;
+  // The coordinator key the session is routed by; it is the pinned form when the request chose a partition.
+  // Absent from an older server, where the requested key applies.
+  optional string CoordinatorKey = 6;
 }
 
 message GrpcCommitTransactionRequest
@@ -1200,6 +1226,7 @@ message GrpcCompleteOperationRequest
   repeated GrpcLockGrantTerm LockGrantTerms = 25;
   // The range locks a batch operation acquired (a batched probe's Shared [k,k] locks).
   repeated GrpcTransactionRangeLock AcquiredRangeLocks = 26;
+  int32 LockExpiresMs = 27;
   GrpcKeyValueDurability Durability = 16;
   GrpcKeyValueResponseType CachedType = 17;
   int64 CachedRevision = 18;
@@ -1674,13 +1701,22 @@ message GrpcDurableBundleEntry {
 // (record init + prepare for an anchor, or a single prepare), carrying the origin's admission class and the
 // range fence it froze the partition against, so the receiver admits and re-fences exactly as the origin's
 // own scheduler would have. Independent per-entry forwards are not an atomic bundle; this is.
+// One dispatch fence of a durable submission: a key and the range-descriptor generation it resolved to when the
+// origin froze the submission's partition. The receiver re-resolves every fence at dispatch and releases the
+// submission retryably when any descriptor moved.
+message GrpcRangeFence {
+  string Key = 1;
+  int64 Generation = 2;
+}
+
 message GrpcDurableBundleRequest {
   int32 PartitionId = 1;
   repeated GrpcDurableBundleEntry Entries = 2;
   int32 AdmissionClass = 3;   // 0 ordinary, 1 terminal (Kahuna's WriteAdmissionClass)
-  string FenceKey = 4;        // empty = unfenced
+  string FenceKey = 4;        // the first fence, for a receiver that predates Fences; empty = unfenced
   int64 FenceGeneration = 5;
   int32 Stage = 6;            // the origin's WriteSubmissionStage; 0 (other) from an older sender
+  repeated GrpcRangeFence Fences = 7;   // every fence; a receiver reads this when present, else FenceKey/FenceGeneration
 }
 
 // The two signals of a bundle stay separate: BatchCommitted (the proposal reached Raft; the record is durable)
@@ -1698,12 +1734,13 @@ message GrpcDurableBundleResponse {
 message GrpcDurableDecisionRequest {
   int32 PartitionId = 1;
   bytes DecisionDelta = 2;
-  string FenceKey = 3;        // empty = unfenced
+  string FenceKey = 3;        // the first fence, for a receiver that predates Fences; empty = unfenced
   int64 FenceGeneration = 4;
   int32 TransactionIdNode = 5;
   int64 TransactionIdPhysical = 6;
   uint32 TransactionIdCounter = 7;
   int64 Epoch = 8;
+  repeated GrpcRangeFence Fences = 9;   // every fence; a receiver reads this when present, else FenceKey/FenceGeneration
 }
 
 // Replicated: the batch carrying the decision committed. Known: the record was read after the apply, and
@@ -1725,7 +1762,7 @@ message GrpcDurableOnePhaseRequest {
   bytes RecordInitDelta = 2;
   bytes AnchorPrepareDelta = 3;
   bytes DecisionDelta = 4;
-  string FenceKey = 5;        // empty = unfenced
+  string FenceKey = 5;        // the first fence, for a receiver that predates Fences; empty = unfenced
   int64 FenceGeneration = 6;
   int32 TransactionIdNode = 7;
   int64 TransactionIdPhysical = 8;
@@ -1738,6 +1775,7 @@ message GrpcDurableOnePhaseRequest {
   // transaction's staged intents (and locks) on the partition were confirmed under at the commit probe. The
   // receiver refuses the bundle before anything is appended when its term differs. 0 = no fence.
   int64 ExpectedTerm = 14;
+  repeated GrpcRangeFence Fences = 15;  // every fence; a receiver reads this when present, else FenceKey/FenceGeneration
 }
 
 // The bundle signals (BatchCommitted / PrepareAcknowledged / PrepareRejection, as in GrpcDurableBundleResponse)
@@ -1904,6 +1942,8 @@ enum GrpcKeyValueResponseType {
   // exists to report. The refusal is permanent: a retry gets the same answer.
   TYPE_WATCH_UNSUPPORTED_ON_EPHEMERAL = 109;
   TYPE_HISTORY_HOLD_LIMIT_REACHED = 110;
+  // A watch was refused because the node, or the gRPC call, already holds its maximum number of open watches.
+  TYPE_WATCH_LIMIT_REACHED = 111;
 }
 
 enum GrpcKeyValueDurability {
