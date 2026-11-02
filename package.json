@@ -1,6 +1,6 @@
 {
   "name": "kahuna-client",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "TypeScript client for Kahuna: distributed locks, key/value store, sequencer and rate limiters",
   "license": "MIT",
   "author": "Andres Gutierrez",

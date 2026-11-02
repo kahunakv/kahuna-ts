@@ -16,6 +16,8 @@ export interface HttpRequestOptions {
   readonly url: string;
   readonly body?: Uint8Array;
   readonly bearerToken: string;
+  /** More request headers, such as the admin key. */
+  readonly headers?: Readonly<Record<string, string>>;
   readonly signal?: AbortSignal;
 }
 
@@ -74,6 +76,7 @@ export class HttpClient {
 
   async send(options: HttpRequestOptions): Promise<HttpResponse> {
     const headers: Record<string, string> = {
+      ...options.headers,
       accept: 'application/json',
       authorization: `Bearer ${options.bearerToken}`,
     };
@@ -100,6 +103,7 @@ export class HttpClient {
    */
   async openStream(options: HttpRequestOptions & { accept: string }): Promise<HttpStreamResponse> {
     const headers: Record<string, string> = {
+      ...options.headers,
       accept: options.accept,
       authorization: `Bearer ${options.bearerToken}`,
     };

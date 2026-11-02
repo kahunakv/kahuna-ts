@@ -93,6 +93,14 @@ export interface KahunaClientOptions extends SecurityOptions {
 
   /** Uses HTTP/2 for the REST transport. Off by default. */
   useHttp2?: boolean;
+
+  /**
+   * The admin key. The client sends it with the admin calls only: node removal,
+   * replication factor, key-range register and remove, split, merge, backups and
+   * restore. A node started with an admin key file refuses those calls without it.
+   * Unset or empty sends no key.
+   */
+  adminApiKey?: string;
 }
 
 /** The settings after every default is applied. */
@@ -109,6 +117,7 @@ export interface ResolvedOptions {
   readonly defaultOperationTimeoutMs: number;
   readonly bearerToken: string;
   readonly useHttp2: boolean;
+  readonly adminApiKey: string | null;
   readonly allowInsecureCertificateValidation: boolean;
   readonly trustedServerCertificateThumbprints: readonly string[];
 }
@@ -132,6 +141,7 @@ export function resolveOptions(options: KahunaClientOptions): ResolvedOptions {
     defaultOperationTimeoutMs: options.defaultOperationTimeoutMs ?? 30_000,
     bearerToken: options.bearerToken ?? 'xxx',
     useHttp2: options.useHttp2 ?? false,
+    adminApiKey: options.adminApiKey ? options.adminApiKey : null,
     allowInsecureCertificateValidation: options.allowInsecureCertificateValidation ?? false,
     trustedServerCertificateThumbprints: options.trustedServerCertificateThumbprints ?? [],
   };

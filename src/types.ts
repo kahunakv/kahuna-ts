@@ -305,6 +305,14 @@ export interface ClusterPlacement {
 export interface ClusterLeaveResult {
   readonly left: boolean;
   readonly drained: boolean;
+  /**
+   * `Committed`, `NotAMember`, `RefusedInsufficientVoters`, `RefusedDrainInProgress`,
+   * `DrainTimedOut`, `Evicted`, `NotInitialized`, `NoLeader` or `Timeout`.
+   *
+   * `Evicted` means that the cluster removed the node as a dead member while the
+   * request was in flight. Nothing was evacuated, and auto-rejoin brings the node
+   * back. Retry when the node is a member again.
+   */
   readonly outcome: string;
   readonly membershipVersion: number;
   readonly retryable: boolean;
@@ -413,6 +421,10 @@ export interface RoutingMetadata {
 // ── Snapshot holds ───────────────────────────────────────────────────────────
 
 export interface SnapshotHold {
+  /**
+   * `set` when the hold is registered. `snapshotHoldLimitReached` when the holder,
+   * or the cluster, already holds the maximum number of holds.
+   */
   readonly type: KeyValueResponseCode;
   readonly holdId: string;
   readonly leaseExpiry: HlcTimestamp;

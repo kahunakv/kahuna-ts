@@ -131,6 +131,9 @@ interface JsonRecord {
  * describes a transient server condition rather than a failure the caller should
  * see.
  */
+/** The HTTP header that carries the admin key. */
+export const ADMIN_KEY_HEADER_NAME = 'X-Kahuna-Admin-Key';
+
 export class RestTransport implements Transport {
   readonly kind = 'rest' as const;
 
@@ -140,11 +143,19 @@ export class RestTransport implements Transport {
 
   private readonly bearerToken: string;
 
+  /** The admin key header, sent with the admin calls only; empty sends none. */
+  private readonly adminHeaders: Readonly<Record<string, string>>;
+
   constructor(
-    options: SecurityOptions & { bearerToken?: string; useHttp2?: boolean } = {},
+    options: SecurityOptions & {
+      bearerToken?: string;
+      useHttp2?: boolean;
+      adminApiKey?: string | null;
+    } = {},
   ) {
     this.http = new HttpClient(options, options.useHttp2 ?? false);
     this.bearerToken = options.bearerToken ?? 'xxx';
+    this.adminHeaders = options.adminApiKey ? { [ADMIN_KEY_HEADER_NAME]: options.adminApiKey } : {};
   }
 
   async close(): Promise<void> {
@@ -186,6 +197,7 @@ export class RestTransport implements Transport {
     method: 'GET' | 'POST',
     body: unknown,
     signal: AbortSignal | undefined,
+    headers?: Readonly<Record<string, string>>,
   ): Promise<JsonRecord> {
     const target = joinUrl(url, path);
     const encoded =
@@ -202,6 +214,7 @@ export class RestTransport implements Transport {
           url: target,
           body: encoded,
           bearerToken: this.bearerToken,
+          headers,
           signal,
         });
 
@@ -226,6 +239,31 @@ export class RestTransport implements Transport {
         const next = backoff.next();
         await delay(next.done ? 1_000 : next.value, signal);
       }
+    }
+  }
+
+  /**
+   * Sends one admin request. It adds the admin key header when one is configured. It
+   * turns the node's 401 refusal into an error that names the missing key.
+   */
+  private async adminSend(
+    url: string,
+    path: string,
+    method: 'GET' | 'POST',
+    body: unknown,
+    signal: AbortSignal | undefined,
+  ): Promise<JsonRecord> {
+    try {
+      return await this.send(url, path, method, body, signal, this.adminHeaders);
+    } catch (error) {
+      if (error instanceof HttpStatusError && error.status === 401) {
+        throw KahunaError.lock(
+          `The node refused the admin operation /${path.split('?')[0]}: a valid admin key is required (adminApiKey).`,
+          'errored',
+          { cause: error },
+        );
+      }
+      throw error;
     }
   }
 
@@ -1320,7 +1358,7 @@ export class RestTransport implements Transport {
     keySpace: string,
     options?: CallOptions,
   ): Promise<RegisterKeyRangeResult> {
-    const response = await this.send(
+    const response = await this.adminSend(
       url,
       'v1/ranges/register',
       'POST',
@@ -1347,7 +1385,7 @@ export class RestTransport implements Transport {
     keySpace: string,
     options?: CallOptions,
   ): Promise<RemoveKeyRangeResult> {
-    const response = await this.send(
+    const response = await this.adminSend(
       url,
       'v1/ranges/unregister',
       'POST',
@@ -1398,7 +1436,7 @@ export class RestTransport implements Transport {
     splitKey: string,
     options?: CallOptions,
   ): Promise<SplitRangeResult> {
-    const response = await this.send(
+    const response = await this.adminSend(
       url,
       'v1/ranges/split',
       'POST',
@@ -1422,7 +1460,7 @@ export class RestTransport implements Transport {
   }
 
   async mergeRanges(url: string, options?: CallOptions): Promise<MergeRangesResult> {
-    const response = await this.send(url, 'v1/ranges/merge', 'POST', {}, options?.signal);
+    const response = await this.adminSend(url, 'v1/ranges/merge', 'POST', {}, options?.signal);
 
     if (!response['status']) {
       throw KahunaError.lock('MergeRanges returned no outcome', 'errored');
@@ -1530,7 +1568,7 @@ export class RestTransport implements Transport {
   }
 
   async leaveCluster(url: string, options?: CallOptions): Promise<ClusterLeaveResult> {
-    const response = await this.send(url, 'v1/cluster/leave', 'POST', {}, options?.signal);
+    const response = await this.adminSend(url, 'v1/cluster/leave', 'POST', {}, options?.signal);
 
     if (!response['outcome']) {
       throw KahunaError.lock('LeaveCluster returned no outcome', 'errored');
@@ -1552,7 +1590,7 @@ export class RestTransport implements Transport {
     replicationFactor: number,
     options?: CallOptions,
   ): Promise<SetReplicationFactorResult> {
-    const response = await this.send(
+    const response = await this.adminSend(
       url,
       'v1/cluster/replication-factor',
       'POST',
@@ -1684,7 +1722,7 @@ export class RestTransport implements Transport {
 
   async takeFullBackup(url: string, options?: CallOptions): Promise<BackupInfo> {
     return readBackupInfo(
-      await this.backupCall(url, 'v1/backups/full', 'POST', {}, options?.signal),
+      await this.backupCall(url, 'v1/backups/full', 'POST', {}, options?.signal, true),
     );
   }
 
@@ -1700,18 +1738,19 @@ export class RestTransport implements Transport {
         'POST',
         { parentBackupId },
         options?.signal,
+        true,
       ),
     );
   }
 
   async takeCoordinatedBackup(url: string, options?: CallOptions): Promise<BackupInfo> {
     return readBackupInfo(
-      await this.backupCall(url, 'v1/backups/coordinated', 'POST', {}, options?.signal),
+      await this.backupCall(url, 'v1/backups/coordinated', 'POST', {}, options?.signal, true),
     );
   }
 
   async listBackups(url: string, options?: CallOptions): Promise<BackupInfo[]> {
-    const response = await this.backupCall(url, 'v1/backups', 'GET', undefined, options?.signal);
+    const response = await this.backupCall(url, 'v1/backups', 'GET', undefined, options?.signal, false);
     return asArray(response).map(readBackupInfo);
   }
 
@@ -1726,6 +1765,7 @@ export class RestTransport implements Transport {
       'GET',
       undefined,
       options?.signal,
+      false,
     );
     return asArray(response).map(readBackupInfo);
   }
@@ -1743,6 +1783,7 @@ export class RestTransport implements Transport {
       'POST',
       { leafBackupId, targetDir, targetTimeMs },
       options?.signal,
+      true,
     );
 
     return {
@@ -1768,6 +1809,7 @@ export class RestTransport implements Transport {
       'POST',
       {},
       options?.signal,
+      true,
     );
 
     return {
@@ -1804,9 +1846,12 @@ export class RestTransport implements Transport {
     method: 'GET' | 'POST',
     body: unknown,
     signal: AbortSignal | undefined,
+    admin: boolean,
   ): Promise<JsonRecord> {
     try {
-      return await this.send(url, path, method, body, signal);
+      return admin
+        ? await this.adminSend(url, path, method, body, signal)
+        : await this.send(url, path, method, body, signal);
     } catch (error) {
       if (error instanceof HttpStatusError) {
         const outcome = readBackupOutcomeHeader(error);

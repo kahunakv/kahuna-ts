@@ -67,6 +67,7 @@ transport needs no `protoc` and no code generation step.
 | `trustedServerCertificateThumbprints` | `[]` | SHA-256 pins, in hexadecimal. |
 | `useHttp2` | `false` | REST transport only. |
 | `bearerToken` | `'xxx'` | REST transport only. |
+| `adminApiKey` | — | Sent with the admin calls only. See [Cluster and operations](#cluster-and-operations). |
 
 ### Routing
 
@@ -511,6 +512,24 @@ await client.restore(leafBackupId, '/var/lib/kahuna/restored');
 await client.collectBackupGarbage({ dryRun: true });
 ```
 
+A node started with an admin key file refuses the admin calls without that key.
+The admin calls are `leaveCluster`, `setReplicationFactor`, `registerKeyRange`,
+`removeKeyRange`, `splitRange`, `mergeRanges`, the three backup calls, `restore`
+and `collectBackupGarbage`. Set `adminApiKey` to send the key:
+
+```ts
+const admin = new KahunaClient({ endpoints, adminApiKey: process.env.KAHUNA_ADMIN_KEY });
+```
+
+The client sends the key with the admin calls and with no other call. REST sends it
+in the `X-Kahuna-Admin-Key` header. gRPC sends it in the `x-kahuna-admin-key`
+metadata entry. When the node refuses an admin call, the client raises a
+`KahunaError` whose message names `adminApiKey`.
+
+`splitRange` returns the status `PartitionLimitReached` when the cluster is at its
+partition limit, or the key space is at its range quota. Nothing changed. A retry
+gets the same answer until a removal or a merge frees a slot.
+
 ## Errors
 
 Every protocol failure is a `KahunaError`. Read its `domain` before its `code`: the
@@ -530,6 +549,11 @@ try {
 // Back off before you retry an admission refusal: the node is shedding load.
 if (isKeyValueCode(error, 'admissionRefused')) await backOff();
 ```
+
+A transaction session writes a limited number of keys and holds a limited number of
+locks. Past the limit, the operation fails with `transactionMutationLimitReached`.
+The session stays open: you can commit what it holds, or roll it back. Do not retry
+the operation. Split the work into smaller transactions.
 
 An operation that the server answered is not an error. A write a condition
 rejected, and a read of a key that holds no value, both come back as an entry whose

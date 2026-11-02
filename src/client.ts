@@ -1307,12 +1307,14 @@ function buildTransport(kind: 'grpc' | 'rest', options: ResolvedOptions): Transp
       ...security,
       bearerToken: options.bearerToken,
       useHttp2: options.useHttp2,
+      adminApiKey: options.adminApiKey,
     });
   }
 
   return new GrpcTransport({
     ...security,
     defaultOperationTimeoutMs: options.defaultOperationTimeoutMs,
+    adminApiKey: options.adminApiKey,
   });
 }
 

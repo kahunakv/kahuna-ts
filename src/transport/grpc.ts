@@ -1,4 +1,4 @@
-import type * as grpc from '@grpc/grpc-js';
+import * as grpc from '@grpc/grpc-js';
 
 import {
   DURABILITY_CODES,
@@ -121,6 +121,9 @@ const CLUSTER_MEMBER_ROLES = ['Learner', 'Voter', 'Leaving', 'NotMember'];
 /** Names of the replica roles, indexed by the proto enum value. */
 const PARTITION_REPLICA_ROLES = ['Voter', 'Learner', 'Removing'];
 
+/** The gRPC metadata entry that carries the admin key. */
+export const ADMIN_KEY_METADATA_NAME = 'x-kahuna-admin-key';
+
 /** Names of the leave outcomes, indexed by the proto enum value. */
 const LEAVE_OUTCOMES = [
   'Committed',
@@ -131,6 +134,7 @@ const LEAVE_OUTCOMES = [
   'Timeout',
   'RefusedDrainInProgress',
   'DrainTimedOut',
+  'Evicted',
 ];
 
 /**
@@ -149,9 +153,15 @@ export class GrpcTransport implements Transport {
 
   private readonly defaultTimeoutMs: number;
 
-  constructor(options: SecurityOptions & { defaultOperationTimeoutMs?: number } = {}) {
+  /** The admin key, sent with the admin calls only; null sends none. */
+  private readonly adminApiKey: string | null;
+
+  constructor(
+    options: SecurityOptions & { defaultOperationTimeoutMs?: number; adminApiKey?: string | null } = {},
+  ) {
     this.pool = new GrpcChannelPool(options);
     this.defaultTimeoutMs = options.defaultOperationTimeoutMs ?? 30_000;
+    this.adminApiKey = options.adminApiKey ? options.adminApiKey : null;
   }
 
   async close(): Promise<void> {
@@ -183,13 +193,45 @@ export class GrpcTransport implements Transport {
     method: string,
     request: Message,
     signal: AbortSignal | undefined,
+    metadata?: grpc.Metadata,
   ): Promise<T> {
-    return invokeUnary<T>(client, method, request, signal, this.defaultTimeoutMs).catch(
+    return invokeUnary<T>(client, method, request, signal, this.defaultTimeoutMs, metadata).catch(
       (error: unknown) => {
         if (!isAbortError(error)) this.routeSink?.reportEndpointFailure(url);
         throw error;
       },
     );
+  }
+
+  /**
+   * Invokes one admin RPC. It sends the admin key when one is configured. It turns
+   * the node's `UNAUTHENTICATED` refusal into an error that names the missing key.
+   */
+  private async adminCall<T extends Message>(
+    url: string,
+    client: grpc.Client,
+    method: string,
+    request: Message,
+    signal: AbortSignal | undefined,
+  ): Promise<T> {
+    let metadata: grpc.Metadata | undefined;
+    if (this.adminApiKey !== null) {
+      metadata = new grpc.Metadata();
+      metadata.set(ADMIN_KEY_METADATA_NAME, this.adminApiKey);
+    }
+
+    try {
+      return await this.call<T>(url, client, method, request, signal, metadata);
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === grpc.status.UNAUTHENTICATED) {
+        throw KahunaError.lock(
+          `The node refused the admin operation ${method}: a valid admin key is required (adminApiKey).`,
+          'errored',
+          { cause: error },
+        );
+      }
+      throw error;
+    }
   }
 
   /**
@@ -1306,7 +1348,7 @@ export class GrpcTransport implements Transport {
     keySpace: string,
     options?: CallOptions,
   ): Promise<RegisterKeyRangeResult> {
-    const response = await this.call<Message>(
+    const response = await this.adminCall<Message>(
       url,
       this.services(url).keyValuer,
       'RegisterKeyRange',
@@ -1329,7 +1371,7 @@ export class GrpcTransport implements Transport {
     keySpace: string,
     options?: CallOptions,
   ): Promise<RemoveKeyRangeResult> {
-    const response = await this.call<Message>(
+    const response = await this.adminCall<Message>(
       url,
       this.services(url).keyValuer,
       'RemoveKeyRange',
@@ -1377,7 +1419,7 @@ export class GrpcTransport implements Transport {
     splitKey: string,
     options?: CallOptions,
   ): Promise<SplitRangeResult> {
-    const response = await this.call<Message>(
+    const response = await this.adminCall<Message>(
       url,
       this.services(url).cluster,
       'SplitRange',
@@ -1397,7 +1439,7 @@ export class GrpcTransport implements Transport {
   }
 
   async mergeRanges(url: string, options?: CallOptions): Promise<MergeRangesResult> {
-    const response = await this.call<Message>(
+    const response = await this.adminCall<Message>(
       url,
       this.services(url).cluster,
       'MergeRanges',
@@ -1512,7 +1554,7 @@ export class GrpcTransport implements Transport {
   }
 
   async leaveCluster(url: string, options?: CallOptions): Promise<ClusterLeaveResult> {
-    const response = await this.call<Message>(
+    const response = await this.adminCall<Message>(
       url,
       this.services(url).cluster,
       'Leave',
@@ -1536,7 +1578,7 @@ export class GrpcTransport implements Transport {
     replicationFactor: number,
     options?: CallOptions,
   ): Promise<SetReplicationFactorResult> {
-    const response = await this.call<Message>(
+    const response = await this.adminCall<Message>(
       url,
       this.services(url).cluster,
       'SetReplicationFactor',
@@ -1673,7 +1715,7 @@ export class GrpcTransport implements Transport {
   // ── Backups ────────────────────────────────────────────────────────────────
 
   async takeFullBackup(url: string, options?: CallOptions): Promise<BackupInfo> {
-    return readBackupInfo(await this.backupCall(url, 'TakeFullBackup', {}, options?.signal));
+    return readBackupInfo(await this.backupCall(url, 'TakeFullBackup', {}, options?.signal, true));
   }
 
   async takeIncrementalBackup(
@@ -1687,16 +1729,19 @@ export class GrpcTransport implements Transport {
         'TakeIncrementalBackup',
         { ParentBackupId: parentBackupId },
         options?.signal,
+        true,
       ),
     );
   }
 
   async takeCoordinatedBackup(url: string, options?: CallOptions): Promise<BackupInfo> {
-    return readBackupInfo(await this.backupCall(url, 'TakeCoordinatedBackup', {}, options?.signal));
+    return readBackupInfo(
+      await this.backupCall(url, 'TakeCoordinatedBackup', {}, options?.signal, true),
+    );
   }
 
   async listBackups(url: string, options?: CallOptions): Promise<BackupInfo[]> {
-    const response = await this.backupCall(url, 'ListBackups', {}, options?.signal);
+    const response = await this.backupCall(url, 'ListBackups', {}, options?.signal, false);
     return asArray(response['Backups']).map(readBackupInfo);
   }
 
@@ -1710,6 +1755,7 @@ export class GrpcTransport implements Transport {
       'GetBackupChain',
       { LeafBackupId: leafBackupId },
       options?.signal,
+      false,
     );
     return asArray(response['Backups']).map(readBackupInfo);
   }
@@ -1726,6 +1772,7 @@ export class GrpcTransport implements Transport {
       'Restore',
       { LeafBackupId: leafBackupId, TargetDir: targetDir, TargetTimeMs: targetTimeMs },
       options?.signal,
+      true,
     );
 
     return {
@@ -1750,6 +1797,7 @@ export class GrpcTransport implements Transport {
       'RunBackupGarbageCollection',
       { DryRun: dryRun },
       options?.signal,
+      true,
     );
 
     return {
@@ -1770,15 +1818,22 @@ export class GrpcTransport implements Transport {
     };
   }
 
-  /** Runs a backup RPC and turns the typed refusal trailer into a typed error. */
+  /**
+   * Runs a backup RPC and turns the typed refusal trailer into a typed error. An
+   * admin backup RPC also sends the admin key.
+   */
   private async backupCall(
     url: string,
     method: string,
     request: Message,
     signal: AbortSignal | undefined,
+    admin: boolean,
   ): Promise<Message> {
     try {
-      return await this.call<Message>(url, this.services(url).backups, method, request, signal);
+      const client = this.services(url).backups;
+      return admin
+        ? await this.adminCall<Message>(url, client, method, request, signal)
+        : await this.call<Message>(url, client, method, request, signal);
     } catch (error) {
       const outcome = readBackupOutcomeTrailer(error);
       if (outcome !== null) {
@@ -1801,6 +1856,7 @@ function invokeUnary<T>(
   request: Message,
   signal: AbortSignal | undefined,
   defaultTimeoutMs: number,
+  metadata?: grpc.Metadata,
 ): Promise<T> {
   throwIfAborted(signal);
 
@@ -1819,17 +1875,17 @@ function invokeUnary<T>(
     }
 
     let settled = false;
-    const call = (invoke as (...args: unknown[]) => UnaryCall).call(
-      client,
-      request,
-      callOptions,
-      (error: grpc.ServiceError | null, response: T) => {
-        settled = true;
-        signal?.removeEventListener('abort', onAbort);
-        if (error !== null) reject(error);
-        else resolve(response);
-      },
-    );
+    const callback = (error: grpc.ServiceError | null, response: T): void => {
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      if (error !== null) reject(error);
+      else resolve(response);
+    };
+    const args: unknown[] =
+      metadata === undefined
+        ? [request, callOptions, callback]
+        : [request, metadata, callOptions, callback];
+    const call = (invoke as (...args: unknown[]) => UnaryCall).apply(client, args);
 
     function onAbort(): void {
       if (!settled) call.cancel();

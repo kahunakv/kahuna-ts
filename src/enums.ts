@@ -50,7 +50,10 @@ export type KeyValueResponseCode =
   | 'admissionRefused'
   | 'watchUnsupportedOnEphemeral'
   | 'historyHoldLimitReached'
-  | 'watchLimitReached';
+  | 'watchLimitReached'
+  | 'snapshotHoldLimitReached'
+  | 'transactionMutationLimitReached'
+  | 'notApplied';
 
 /** Outcome code of a sequence operation. */
 export type SequenceResponseCode =
@@ -284,6 +287,9 @@ export const KEY_VALUE_RESPONSE_CODES: Readonly<Record<KeyValueResponseCode, num
   watchUnsupportedOnEphemeral: 109,
   historyHoldLimitReached: 110,
   watchLimitReached: 111,
+  snapshotHoldLimitReached: 112,
+  transactionMutationLimitReached: 113,
+  notApplied: 114,
 };
 
 export const SEQUENCE_RESPONSE_CODES: Readonly<Record<SequenceResponseCode, number>> = {

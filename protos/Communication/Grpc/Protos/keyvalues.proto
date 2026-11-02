@@ -85,6 +85,10 @@ message GrpcTrySetKeyValueResponse {
 
 message GrpcTrySetManyKeyValueRequest {
   repeated GrpcTrySetManyKeyValueRequestItem Items = 1;
+  // Inter-node only: the check round of a transactional batch that spans several partition leaders. The
+  // receiver evaluates every item's condition and conflicts and stages nothing; an item that would stage
+  // answers TYPE_NOT_APPLIED. A client-facing request with this bit set is refused with TYPE_INVALID_INPUT.
+  bool CheckOnly = 2;
 }
 
 message GrpcTrySetManyKeyValueRequestItem {
@@ -581,8 +585,9 @@ message GrpcTryCheckManyWriteIntentsRequestItem {
   GrpcKeyValueDurability Durability = 2;
   // KeyValueConflictChecks bit set: which conflict classes to answer for this key
   // (1 = concurrent write intent, 2 = foreign range lock, 4 = staged base moved, 8 = pin own intent,
-  // 16 = leader term changed). Selected per key
-  // because one probe carries a transaction's read set and its write set, which ask different questions.
+  // 16 = leader term changed, 32 = own staged intent held, 64 = report the commit floor of the own staged
+  // intent). Selected per key because one probe carries a transaction's read set and its write set, which
+  // ask different questions.
   uint32 Checks = 3;
   // For the staged-base check (4): the committed base the caller's read-modify-write of this key was
   // validated against — the revision when the base existed, or -1 when the validated base was
@@ -598,6 +603,12 @@ message GrpcTryCheckManyWriteIntentsResponse {
   // The leadership terms under which the serving node confirmed the caller's own staged intents held
   // (check 32), one per partition, so the caller's one-phase bundle can be fenced to that leadership.
   repeated GrpcLockGrantTerm GrantTerms = 3;
+  // The highest commit floor over the caller's own staged intents the serving node confirmed held (check 64):
+  // the highest snapshot timestamp a read was served the committed head at over one of them. The caller mints
+  // its commit timestamp strictly above it. Zero when no snapshot read passed over those intents.
+  int32 CommitFloorNode = 4;
+  int64 CommitFloorPhysical = 5;
+  uint32 CommitFloorCounter = 6;
 }
 
 message GrpcTryCheckManyWriteIntentsResponseItem {
@@ -635,6 +646,11 @@ message GrpcTryAcquireManyExclusiveLocksRequest {
   repeated GrpcTryAcquireManyExclusiveLocksRequestItem Items = 4;
   // One policy for the whole batch: every item belongs to the same transaction.
   GrpcTransactionConflictPolicy ConflictPolicy = 5;
+  // Registration identity of the session the locks belong to. A client must send both; the coordinator then tracks
+  // the locks and releases them at commit or rollback.
+  string CoordinatorKey = 6;
+  uint64 OperationIdHigh = 7;
+  uint64 OperationIdLow = 8;
 }
 
 message GrpcTryAcquireManyExclusiveLocksResponse {
@@ -1030,6 +1046,10 @@ message GrpcStartTransactionRequest
   optional string Origin = 14;
   // The data partition whose leader hosts the session. Absent keeps the hash rule on CoordinatorKey.
   optional int32 CoordinatorPartitionId = 15;
+  // The most keys the session may write, and the most locks it may take, set by the node whose client entry point
+  // started it and carried when the start is forwarded. A client entry point overwrites whatever a client sends
+  // here. Zero means no limit.
+  int32 MutationLimit = 16;
 }
 
 message GrpcStartTransactionResponse
@@ -1151,6 +1171,9 @@ enum GrpcOperationRegistrationOutcome {
   GRPC_OP_OUTCOME_REJECTED_SESSION_CLOSED = 3;
   GRPC_OP_OUTCOME_REJECTED_DUPLICATE = 4;
   GRPC_OP_OUTCOME_REJECTED_CAPACITY = 5;
+  GRPC_OP_OUTCOME_REJECTED_SESSION_BUDGET = 6;
+  // The session already holds its maximum number of written keys or of locks.
+  GRPC_OP_OUTCOME_REJECTED_MUTATION_LIMIT = 7;
 }
 
 message GrpcTransactionRangeLock
@@ -1185,6 +1208,9 @@ message GrpcBeginOperationRequest
   uint64 OperationIdLow = 6;
   GrpcOperationKind Kind = 7;
   optional bytes PayloadDigest = 8;
+  // How many keys or locks the operation may add to the session's working set; zero for a read. An older sender
+  // leaves it zero.
+  int32 ItemCount = 9;
 }
 
 message GrpcBeginOperationResponse
@@ -1631,6 +1657,9 @@ message GrpcGetRangeTransactionStateResponse {
   // never sets it — its response already carried everything.
   bool HasMore = 5;
   optional string NextCursor = 6;
+  // Serialized CommittedHeadLedgerPageMessage blob (kind 8: the committed heads the staged-base fence remembers
+  // for the range's keys), empty when none or when the peer predates the kind.
+  bytes CommittedHeads = 7;
 }
 
 // A batch of coordinator decision records serialized as one CoordinatorDecisionSnapshotMessage blob.
@@ -1673,6 +1702,19 @@ message GrpcGetStagedBaseVerdictsRequest {
   // How long the replica may wait for the prepare to apply locally before answering NotApplied for the
   // remaining keys. Bounded server-side; 0 answers immediately.
   int32 WaitMs = 7;
+  // The fields the fence judges for each key, aligned with Keys. With these a replica that has not applied the
+  // prepare judges from its committed-head memory and never answers NotApplied for apply lag; an older replica
+  // ignores them and waits as before. Absent (or misaligned) means the older behaviour.
+  repeated GrpcStagedBaseProbe Probes = 8;
+}
+
+// One key's judged fields: the validated base revision (int64 min when the write carries none) and its observed
+// state, the staged revision, and whether the write stages no revision.
+message GrpcStagedBaseProbe {
+  int64 BaseRevision = 1;
+  int32 BaseState = 2;
+  int64 Revision = 3;
+  bool NoRevision = 4;
 }
 
 // One key's verdict: 0 NotApplied (this node holds no matching intent and cannot attest), 1 Clear,
@@ -1944,6 +1986,15 @@ enum GrpcKeyValueResponseType {
   TYPE_HISTORY_HOLD_LIMIT_REACHED = 110;
   // A watch was refused because the node, or the gRPC call, already holds its maximum number of open watches.
   TYPE_WATCH_LIMIT_REACHED = 111;
+  // A snapshot hold was refused because the holder, or the cluster, already holds its maximum number of holds.
+  TYPE_SNAPSHOT_HOLD_LIMIT_REACHED = 112;
+  // A transaction operation was refused because the session already writes its maximum number of keys or holds its
+  // maximum number of locks. Not retryable: split the work into smaller transactions.
+  TYPE_TRANSACTION_MUTATION_LIMIT_REACHED = 113;
+  // An item of a transactional set-many passed its own condition but was not staged, because another item of
+  // the batch was refused or answered a transient type: a transactional batch stages every item or none.
+  // Resend the whole batch after a transient answer.
+  TYPE_NOT_APPLIED = 114;
 }
 
 enum GrpcKeyValueDurability {
